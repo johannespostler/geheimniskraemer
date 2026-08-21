@@ -1,0 +1,8 @@
+# Dev reverse proxy: `caddy run --config Caddyfile.dev`
+# Caddy issues a local CA cert for localhost; browsers treat it as a secure
+# context, which WebAuthn requires. Start the app with:
+#   go run . serve -origin https://localhost
+localhost {
+	header Strict-Transport-Security "max-age=31536000"
+	reverse_proxy 127.0.0.1:8087
+}

@@ -1,0 +1,125 @@
+:root {
+  color-scheme: light dark;
+  --fg: #1a1a1a;
+  --bg: #fafafa;
+  --muted: #666;
+  --line: #ddd;
+  --accent: #3a5fcd;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --fg: #e8e8e8; --bg: #16181c; --muted: #999; --line: #333; }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: system-ui, sans-serif;
+  color: var(--fg);
+  background: var(--bg);
+}
+main {
+  max-width: 40rem;
+  margin: 0 auto;
+  padding: 1rem;
+}
+button {
+  font: inherit;
+  padding: 0.45rem 0.9rem;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+}
+button.ghost {
+  background: transparent;
+  color: var(--fg);
+  border-color: var(--line);
+}
+button.danger {
+  background: #c0392b;
+  border-color: #c0392b;
+}
+input, textarea {
+  font: inherit;
+  width: 100%;
+  padding: 0.45rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+}
+label { display: block; margin-bottom: 0.7rem; }
+.error { color: #c0392b; min-height: 1.2em; }
+.spacer { flex: 1; }
+
+header, .toolbar {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin-bottom: 0.8rem;
+}
+.password-row { display: flex; gap: 0.3rem; }
+
+#list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+#list li {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  padding: 0.3rem 0;
+  border-bottom: 1px solid var(--line);
+}
+.entry-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  background: transparent;
+  border: none;
+  color: var(--fg);
+  text-align: left;
+  padding: 0.3rem;
+}
+.entry-info small { color: var(--muted); }
+button.copy {
+  background: transparent;
+  color: var(--accent);
+  border-color: var(--line);
+  min-width: 3.5rem;
+}
+button.danger-text { color: #c0392b; }
+dialog {
+  max-width: 24rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--fg);
+  padding: 1.2rem;
+}
+dialog::backdrop { background: rgb(0 0 0 / 0.5); }
+dialog h2 { margin-top: 0; }
+.code {
+  font-family: ui-monospace, monospace;
+  font-size: 1.3rem;
+  letter-spacing: 0.05em;
+  user-select: all;
+  padding: 0.8rem;
+  border: 1px dashed var(--line);
+  border-radius: 6px;
+  overflow-wrap: anywhere;
+}
+#cred-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+#cred-list li {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  padding: 0.3rem 0;
+  border-bottom: 1px solid var(--line);
+}

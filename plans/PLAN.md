@@ -51,7 +51,7 @@ Encrypting the whole entry as one JSON blob keeps the schema fixed while fields 
 - Headers: HSTS (via Caddy), `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, `Cross-Origin-Opener-Policy`.
 - Sessions: HttpOnly, Secure, SameSite=Strict cookie; short TTL; server-side session store.
 - CSRF: SameSite=Strict + custom header check (no token machinery needed for a JSON API).
-- Registration of new users: invite-token via CLI flag (`./gk invite <name>`) — no open signup.
+- Registration of new users: invite-token via CLI (`gk invite <name>`, prints a single-use expiring registration URL) — no open signup. The CLI is a subcommand of the same binary, run on the server host, writing directly to the SQLite DB (WAL mode handles concurrency with the running server). No admin API: OS access to the DB file *is* the admin boundary.
 - VK lives only in JS memory (non-extractable CryptoKey where possible); wiped on lock/timeout.
 - Rate limiting on auth endpoints; binary runs as non-root, listens on localhost behind Caddy.
 

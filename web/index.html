@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Geheimniskrämer</title>
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/style.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <main>
+    <p id="error" class="error" role="alert"></p>
+
+    <section id="login" hidden>
+      <h1>Geheimniskrämer</h1>
+      <button id="btn-login">Unlock with passkey</button>
+      <p><button id="btn-show-recover" class="ghost">Lost all passkeys? Recover with code</button></p>
+    </section>
+
+    <section id="recover" hidden>
+      <h1>Recover vault</h1>
+      <label>Username <input id="r-username" autocomplete="username"></label>
+      <label>Recovery code <input id="r-code" autocomplete="off" placeholder="xxxx-xxxx-…" spellcheck="false"></label>
+      <p>You'll register a new passkey as part of recovery.</p>
+      <div class="toolbar">
+        <button id="btn-recover">Recover</button>
+        <button id="btn-recover-cancel" class="ghost">Cancel</button>
+      </div>
+    </section>
+
+    <section id="recovery-code" hidden>
+      <h1>Your recovery code</h1>
+      <p>Store this somewhere safe and offline. It is shown <strong>only once</strong> and is the only way
+        back into your vault if you lose every passkey.</p>
+      <p id="code-text" class="code"></p>
+      <div class="toolbar">
+        <button id="btn-code-copy" class="ghost">Copy</button>
+        <button id="btn-code-done">I stored it safely</button>
+      </div>
+    </section>
+
+    <section id="register" hidden>
+      <h1>Geheimniskrämer</h1>
+      <p>You've been invited. Register a passkey to create your vault.</p>
+      <button id="btn-register">Create vault with passkey</button>
+    </section>
+
+    <section id="vault" hidden>
+      <header>
+        <strong id="whoami"></strong>
+        <span class="spacer"></span>
+        <button id="btn-settings" class="ghost">Settings</button>
+        <button id="btn-lock" class="ghost">Lock</button>
+        <button id="btn-logout" class="ghost">Log out</button>
+      </header>
+
+      <div id="browser">
+        <div class="toolbar">
+          <input id="search" type="search" placeholder="Search…" autocomplete="off">
+          <button id="btn-add">Add</button>
+        </div>
+        <p id="empty" hidden>No entries yet.</p>
+        <ul id="list"></ul>
+      </div>
+
+      <div id="editor" hidden>
+        <h2 id="editor-title"></h2>
+        <label>Name <input id="f-name" autocomplete="off"></label>
+        <label>Website <input id="f-website" autocomplete="off" inputmode="url"></label>
+        <label>Username <input id="f-username" autocomplete="off"></label>
+        <label>Password
+          <span class="password-row">
+            <input id="f-password" type="password" autocomplete="off">
+            <button id="btn-reveal" class="ghost" title="Show/hide">👁</button>
+            <button id="btn-generate" class="ghost" title="Generate">⚙</button>
+          </span>
+        </label>
+        <label>Notes <textarea id="f-notes" rows="3"></textarea></label>
+        <div class="toolbar">
+          <button id="btn-save">Save</button>
+          <button id="btn-cancel" class="ghost">Cancel</button>
+          <span class="spacer"></span>
+          <button id="btn-delete" class="danger">Delete</button>
+        </div>
+      </div>
+
+      <div id="settings" hidden>
+        <h2>Passkeys</h2>
+        <ul id="cred-list"></ul>
+        <div class="toolbar">
+          <button id="btn-add-passkey">Add passkey</button>
+        </div>
+        <h2>Recovery</h2>
+        <p id="recovery-status"></p>
+        <div class="toolbar">
+          <button id="btn-regen-recovery" class="ghost">Generate new recovery code</button>
+          <span class="spacer"></span>
+          <button id="btn-settings-back" class="ghost">Back</button>
+        </div>
+      </div>
+    </section>
+    <dialog id="guide">
+      <h2 id="guide-title"></h2>
+      <p id="guide-text"></p>
+      <div class="toolbar">
+        <button id="btn-guide"></button>
+        <button id="btn-guide-cancel" class="ghost">Cancel</button>
+      </div>
+    </dialog>
+  </main>
+</body>
+</html>
