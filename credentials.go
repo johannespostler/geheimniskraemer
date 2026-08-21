@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
+	"log"
 	"net/http"
 	"time"
 
@@ -213,24 +214,27 @@ func (s *server) handleRecoverBegin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	verifier, err := base64.RawURLEncoding.DecodeString(req.Verifier)
-	deny := func() {
+	// The reason is logged server-side only; the client always gets the same
+	// generic 403 so recovery can't be used to probe for accounts.
+	deny := func(reason string) {
+		log.Printf("gk: recovery denied for %q: %s", req.Username, reason)
 		time.Sleep(500 * time.Millisecond) // blunt brute-force damper
-		http.Error(w, "recovery failed", http.StatusForbidden)
+		http.Error(w, "recovery failed — check the username and make sure you use the most recent recovery code", http.StatusForbidden)
 	}
 	if err != nil {
-		deny()
+		deny("malformed verifier")
 		return
 	}
 	var userID int64
 	var stored []byte
-	if err := s.db.QueryRow(`SELECT id, recovery_verifier FROM users WHERE name = ? AND recovery_verifier IS NOT NULL`,
+	if err := s.db.QueryRow(`SELECT id, recovery_verifier FROM users WHERE name = ? COLLATE NOCASE AND recovery_verifier IS NOT NULL`,
 		req.Username).Scan(&userID, &stored); err != nil {
-		deny()
+		deny("no such user or no recovery code set")
 		return
 	}
 	hash := sha256.Sum256(verifier)
 	if subtle.ConstantTimeCompare(hash[:], stored) != 1 {
-		deny()
+		deny("verifier mismatch (wrong or outdated code)")
 		return
 	}
 	u, err := s.userByID(userID)

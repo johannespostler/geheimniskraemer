@@ -4,7 +4,10 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Geheimniskrämer</title>
+  <meta name="theme-color" content="#3a5fcd">
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <link rel="manifest" href="/manifest.json">
   <link rel="stylesheet" href="/style.css">
   <script type="module" src="/app.js"></script>
 </head>
@@ -95,14 +98,13 @@
         <p id="recovery-status"></p>
         <div class="toolbar">
           <button id="btn-regen-recovery" class="ghost">Generate new recovery code</button>
-          <span class="spacer"></span>
-          <button id="btn-settings-back" class="ghost">Back</button>
         </div>
       </div>
     </section>
     <dialog id="guide">
       <h2 id="guide-title"></h2>
       <p id="guide-text"></p>
+      <input id="guide-input" autocomplete="off" hidden>
       <div class="toolbar">
         <button id="btn-guide"></button>
         <button id="btn-guide-cancel" class="ghost">Cancel</button>

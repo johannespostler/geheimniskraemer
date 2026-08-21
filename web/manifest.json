@@ -1,0 +1,15 @@
+{
+  "name": "Geheimniskrämer",
+  "short_name": "Vault",
+  "description": "Self-hosted passkey password manager",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#16181c",
+  "theme_color": "#3a5fcd",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}

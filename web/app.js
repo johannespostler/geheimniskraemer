@@ -34,6 +34,7 @@ function show(view) {
 
 function showPanel(panel) {
   for (const p of ["browser", "editor", "settings"]) $(p).hidden = p !== panel;
+  $("btn-settings").textContent = panel === "settings" ? "Back" : "Settings";
 }
 
 function fail(err) {
@@ -244,27 +245,37 @@ async function openSettings() {
 // Step-guide modal: shown before each passkey prompt in multi-ceremony flows
 // so the user knows WHICH passkey the next browser dialog is about. The
 // Continue click also provides fresh user activation for the WebAuthn call.
-function guide(title, text) {
+// opts: {input: placeholder} shows a text field and resolves with its value;
+// {button: label} overrides the confirm label.
+function guide(title, text, opts = {}) {
   return new Promise((resolve, reject) => {
     $("guide-title").textContent = title;
     $("guide-text").textContent = text;
-    $("btn-guide").textContent = "Continue";
+    const inp = $("guide-input");
+    inp.hidden = !opts.input;
+    inp.value = "";
+    inp.placeholder = opts.input || "";
+    $("btn-guide").textContent = opts.button || "Continue";
     const dlg = $("guide");
-    const done = (ok) => { dlg.close(); ok ? resolve() : reject(new Error("Cancelled.")); };
+    const done = (ok) => {
+      dlg.close();
+      ok ? resolve(opts.input ? inp.value.trim() : undefined) : reject(new Error("Cancelled."));
+    };
     $("btn-guide").onclick = () => done(true);
     $("btn-guide-cancel").onclick = () => done(false);
     dlg.oncancel = () => done(false);
     dlg.showModal();
+    if (opts.input) inp.focus();
   });
 }
 
 async function addPasskey() {
-  await guide("Add passkey — step 1 of 2",
+  await guide("Add passkey — step 1 of 3",
     "First you'll create the NEW passkey. In the next browser dialog, pick where it should live — e.g. scan the QR code with your phone.");
   const begin = await api("/api/credentials/add/begin", {});
   const { cred, prfOut: fromCreate } = await createPasskey(begin.publicKey);
   const finish = await api("/api/credentials/add/finish", cred.toJSON());
-  await guide("Add passkey — step 2 of 2",
+  await guide("Add passkey — step 2 of 3",
     "Now confirm with a passkey you ALREADY use on this device. This unlocks your vault key so the new passkey can be granted access.");
   await provisionVaultKey(finish.credentialId, async () => {
     if (fromCreate) return fromCreate;
@@ -272,6 +283,11 @@ async function addPasskey() {
       "Your authenticator needs one extra touch: use the NEW passkey once (scan the QR code again if it's on your phone).");
     return getPRFOutput(cred.rawId);
   });
+  // The passkey works from here on — a cancelled name step is not an error.
+  const name = await guide("Add passkey — step 3 of 3",
+    "Give the new passkey a name so you can recognize it later.",
+    { input: "e.g. phone, yubikey, macbook", button: "Save" }).catch(() => null);
+  if (name) await api("/api/credentials/rename", { credentialId: finish.credentialId, name });
   await openSettings();
 }
 
@@ -303,6 +319,34 @@ function lock() {
   show("login");
 }
 
+// --- auto-lock: idle timeout, plus lock when the tab was hidden too long
+// (phone pocketed, app switched away). The vault key only lives in memory,
+// so locking is just dropping it.
+const AUTO_LOCK_MS = 5 * 60_000;
+let idleTimer = null;
+let hiddenAt = null;
+
+function armAutoLock() {
+  clearTimeout(idleTimer);
+  if (!vaultKey) return;
+  idleTimer = setTimeout(() => { if (vaultKey) lock(); }, AUTO_LOCK_MS);
+}
+
+function initAutoLock() {
+  for (const ev of ["pointerdown", "keydown"]) {
+    addEventListener(ev, armAutoLock, { passive: true });
+  }
+  addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+      hiddenAt = Date.now();
+    } else {
+      if (vaultKey && hiddenAt && Date.now() - hiddenAt > AUTO_LOCK_MS) lock();
+      hiddenAt = null;
+      armAutoLock();
+    }
+  });
+}
+
 async function logout() {
   try { await api("/api/logout", {}); } catch {}
   lock();
@@ -319,6 +363,7 @@ async function enterVault() {
   })));
   show("vault");
   showList();
+  armAutoLock();
 }
 
 function sortedFiltered() {
@@ -356,14 +401,16 @@ function renderList() {
   $("empty").hidden = entries.length > 0;
 }
 
+const COPY_ICON = `<svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" d="M9 4h11v13M4 8h11v13H4z" stroke-linejoin="round"/></svg>`;
+
 function copyButton(label, getValue) {
   const btn = document.createElement("button");
-  btn.textContent = label;
+  btn.innerHTML = `${label} ${COPY_ICON}`; // static markup only, no user data
   btn.className = "copy";
   btn.onclick = async () => {
     await navigator.clipboard.writeText(getValue() || "");
     btn.textContent = "✓";
-    setTimeout(() => { btn.textContent = label; }, 1200);
+    setTimeout(() => { btn.innerHTML = `${label} ${COPY_ICON}`; }, 1200);
     // Best-effort clipboard clear. May overwrite something the user copied
     // in between; acceptable for a password manager.
     clearTimeout(clipboardTimer);
@@ -438,13 +485,18 @@ function init() {
     f.type = f.type === "password" ? "text" : "password";
   };
   $("search").oninput = renderList;
-  $("btn-settings").onclick = () => openSettings().catch(fail);
-  $("btn-settings-back").onclick = showList;
+  $("btn-settings").onclick = () => {
+    if ($("settings").hidden) openSettings().catch(fail);
+    else showList();
+  };
   $("btn-add-passkey").onclick = () => addPasskey().catch(fail);
   $("btn-regen-recovery").onclick = () => regenerateRecovery().catch(fail);
   $("btn-show-recover").onclick = () => show("recover");
   $("btn-recover-cancel").onclick = () => show("login");
   $("btn-recover").onclick = () => recover().catch(fail);
+
+  initAutoLock();
+  navigator.serviceWorker?.register("/sw.js").catch(() => {});
 
   show(new URLSearchParams(location.search).get("invite") ? "register" : "login");
 }
