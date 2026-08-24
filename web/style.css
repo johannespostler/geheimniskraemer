@@ -17,7 +17,7 @@ body {
   background: var(--bg);
 }
 main {
-  max-width: 40rem;
+  max-width: 48rem;
   margin: 0 auto;
   padding: 1rem;
 }
@@ -58,7 +58,18 @@ header, .toolbar {
   align-items: center;
   margin-bottom: 0.8rem;
 }
-.password-row { display: flex; gap: 0.3rem; }
+.password-row { display: flex; gap: 0.3rem; align-items: center; }
+button.icon {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.45rem 0.6rem;
+}
+.totp-code {
+  font-family: ui-monospace, monospace;
+  color: var(--muted);
+  white-space: nowrap;
+  padding: 0 0.3rem;
+}
 
 #list {
   list-style: none;
@@ -74,6 +85,7 @@ header, .toolbar {
 }
 .entry-info {
   flex: 1;
+  min-width: 0; /* allow shrinking below content width so long URLs don't push the buttons out */
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -82,6 +94,12 @@ header, .toolbar {
   color: var(--fg);
   text-align: left;
   padding: 0.3rem;
+}
+.entry-info strong, .entry-info small {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .entry-info small { color: var(--muted); }
 button.copy {

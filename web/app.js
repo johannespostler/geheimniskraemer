@@ -5,6 +5,7 @@ import {
   generateRecoveryCode, parseRecoveryCode, deriveRecoveryKEK, deriveRecoveryVerifier,
 } from "/crypto.js";
 import { mapBitwarden } from "/import.js";
+import { totpCode, totpRemaining } from "/totp.js";
 
 let vaultKey = null; // non-extractable CryptoKey while unlocked
 let username = null;
@@ -92,7 +93,14 @@ async function register() {
   const finish = await api("/api/register/finish", cred.toJSON());
   username = finish.username;
 
-  const prfOut = fromCreate || await getPRFOutput(cred.rawId);
+  let prfOut = fromCreate;
+  if (!prfOut) {
+    // Without this, the assertion prompt right after creation looks like a
+    // surprise login and confuses people.
+    await guide("Almost done",
+      "Your passkey is created. Your authenticator needs one more confirmation with it to set up encryption — this is still part of setup, not a login.");
+    prfOut = await getPRFOutput(cred.rawId);
+  }
   const kek = await deriveKEK(prfOut);
   prfOut.fill(0);
   const rawVK = generateRawVaultKey();
@@ -107,7 +115,17 @@ async function register() {
   rawVK.fill(0);
 
   history.replaceState(null, "", "/");
-  showRecoveryCode(code, enterVault);
+  showRecoveryCode(code, async () => {
+    await enterVault();
+    // Optional: offer a second passkey right away. The recovery code is the
+    // emergency backup; a second passkey is the everyday one.
+    try {
+      await guide("Add a second passkey?",
+        "Your recovery code is the emergency backup. For day-to-day safety, add a second passkey on another device — e.g. your phone or a security key. You can also do this later in Settings.",
+        { button: "Add second passkey", cancel: "Maybe later" });
+    } catch { return; }
+    await addPasskey();
+  });
 }
 
 async function uploadRecovery(code, wrappedRec) {
@@ -118,7 +136,7 @@ async function uploadRecovery(code, wrappedRec) {
 function showRecoveryCode(code, onDone) {
   $("code-text").textContent = code;
   $("btn-code-copy").onclick = () => navigator.clipboard.writeText(code);
-  $("btn-code-done").onclick = () => { onDone(); };
+  $("btn-code-done").onclick = () => { Promise.resolve(onDone()).catch(fail); };
   show("recovery-code");
 }
 
@@ -169,7 +187,12 @@ async function recover() {
 
   const kekRec = await deriveRecoveryKEK(codeBytes);
   const vk = await unwrapVaultKey(kekRec, b64uDecode(finish.recoveryWrappedKey), true);
-  const prfOut = fromCreate || await getPRFOutput(cred.rawId);
+  let prfOut = fromCreate;
+  if (!prfOut) {
+    await guide("Almost done",
+      "Your new passkey is created. One more confirmation with it re-encrypts your vault key — still part of recovery, not a login.");
+    prfOut = await getPRFOutput(cred.rawId);
+  }
   const kekNew = await deriveKEK(prfOut);
   prfOut.fill(0);
   const wrapped = await wrapVaultKey(kekNew, vk);
@@ -252,7 +275,7 @@ async function openSettings() {
 // so the user knows WHICH passkey the next browser dialog is about. The
 // Continue click also provides fresh user activation for the WebAuthn call.
 // opts: {input: placeholder} shows a text field and resolves with its value;
-// {button: label} overrides the confirm label.
+// {button: label} and {cancel: label} override the button labels.
 function guide(title, text, opts = {}) {
   return new Promise((resolve, reject) => {
     $("guide-title").textContent = title;
@@ -262,6 +285,7 @@ function guide(title, text, opts = {}) {
     inp.value = "";
     inp.placeholder = opts.input || "";
     $("btn-guide").textContent = opts.button || "Continue";
+    $("btn-guide-cancel").textContent = opts.cancel || "Cancel";
     const dlg = $("guide");
     const done = (ok) => {
       dlg.close();
@@ -462,6 +486,7 @@ function renderList() {
     li.append(info,
       copyButton("user", () => e.data.username),
       copyButton("pass", () => e.data.password));
+    if (e.data.totp) li.append(copyButton("2FA", () => totpCode(e.data.totp)));
     list.append(li);
   }
   $("empty").hidden = entries.length > 0;
@@ -474,7 +499,10 @@ function copyButton(label, getValue) {
   btn.innerHTML = `${label} ${COPY_ICON}`; // static markup only, no user data
   btn.className = "copy";
   btn.onclick = async () => {
-    await navigator.clipboard.writeText(getValue() || "");
+    try {
+      // getValue may be async (TOTP codes are computed on demand).
+      await navigator.clipboard.writeText((await getValue()) || "");
+    } catch (err) { fail(err); return; }
     btn.textContent = "✓";
     setTimeout(() => { btn.innerHTML = `${label} ${COPY_ICON}`; }, 1200);
     // Best-effort clipboard clear. May overwrite something the user copied
@@ -490,16 +518,29 @@ function openEditor(entry) {
   $("editor-title").textContent = entry ? "Edit entry" : "New entry";
   $("btn-delete").hidden = !entry;
   $("editor").dataset.id = entry?.id || "";
-  for (const f of ["name", "website", "username", "password", "notes"]) {
+  for (const f of ["name", "website", "username", "password", "totp", "notes"]) {
     $(`f-${f}`).value = entry?.data[f] || "";
   }
   $("f-password").type = "password";
+  updateTotpPreview();
   $("f-name").focus();
+}
+
+// Live preview of the current TOTP code next to the secret field.
+async function updateTotpPreview() {
+  const el = $("totp-preview");
+  const secret = $("f-totp").value.trim();
+  if ($("editor").hidden || !secret) { el.textContent = ""; return; }
+  try {
+    el.textContent = `${await totpCode(secret)} · ${totpRemaining(secret)}s`;
+  } catch {
+    el.textContent = "invalid secret";
+  }
 }
 
 async function saveEntry() {
   const data = {};
-  for (const f of ["name", "website", "username", "password", "notes"]) {
+  for (const f of ["name", "website", "username", "password", "totp", "notes"]) {
     data[f] = $(`f-${f}`).value;
   }
   if (!data.name && !data.website) throw new Error("Give the entry a name or website.");
@@ -551,6 +592,8 @@ function init() {
     f.type = f.type === "password" ? "text" : "password";
   };
   $("search").oninput = renderList;
+  $("f-totp").oninput = updateTotpPreview;
+  setInterval(updateTotpPreview, 1000);
   $("btn-settings").onclick = () => {
     if ($("settings").hidden) openSettings().catch(fail);
     else showList();

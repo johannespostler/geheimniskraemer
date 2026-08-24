@@ -75,8 +75,24 @@
         <label>Password
           <span class="password-row">
             <input id="f-password" type="password" autocomplete="off">
-            <button id="btn-reveal" class="ghost" title="Show/hide">👁</button>
-            <button id="btn-generate" class="ghost" title="Generate">⚙</button>
+            <button id="btn-reveal" class="ghost icon" title="Show/hide">
+              <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round">
+                <path d="M2.5 12S6 5.8 12 5.8 21.5 12 21.5 12 18 18.2 12 18.2 2.5 12 2.5 12Z"/>
+                <circle cx="12" cy="12" r="2.8"/>
+              </svg>
+            </button>
+            <button id="btn-generate" class="ghost icon" title="Generate">
+              <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+                <path d="M20 5v5h-5"/>
+                <path d="M20 10a8 8 0 1 0 1.7 6"/>
+              </svg>
+            </button>
+          </span>
+        </label>
+        <label>TOTP (2FA)
+          <span class="password-row">
+            <input id="f-totp" autocomplete="off" spellcheck="false" placeholder="otpauth:// URI or base32 secret">
+            <span id="totp-preview" class="totp-code"></span>
           </span>
         </label>
         <label>Notes <textarea id="f-notes" rows="3"></textarea></label>

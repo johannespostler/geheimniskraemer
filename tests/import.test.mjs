@@ -23,11 +23,11 @@ test("maps a login item", () => {
   assert.deepEqual(skipped, {});
   assert.deepEqual(entries, [{
     name: "GitHub", website: "https://github.com",
-    username: "hans", password: "s3cret", notes: "work account",
+    username: "hans", password: "s3cret", totp: "", notes: "work account",
   }]);
 });
 
-test("extra URIs and TOTP land in notes, nothing lost", () => {
+test("extra URIs land in notes, TOTP in its own field", () => {
   const { entries } = mapBitwarden({
     items: [{
       type: 1, name: "X",
@@ -39,7 +39,7 @@ test("extra URIs and TOTP land in notes, nothing lost", () => {
   });
   assert.equal(entries[0].website, "https://a.example");
   assert.match(entries[0].notes, /https:\/\/b\.example/);
-  assert.match(entries[0].notes, /TOTP: otpauth/);
+  assert.equal(entries[0].totp, "otpauth://totp/x?secret=ABC");
 });
 
 test("maps secure notes, counts unsupported types", () => {
@@ -51,11 +51,11 @@ test("maps secure notes, counts unsupported types", () => {
       { type: 4, name: "me" },
     ],
   });
-  assert.deepEqual(entries, [{ name: "wifi", website: "", username: "", password: "", notes: "pw: 1234" }]);
+  assert.deepEqual(entries, [{ name: "wifi", website: "", username: "", password: "", totp: "", notes: "pw: 1234" }]);
   assert.deepEqual(skipped, { card: 2, identity: 1 });
 });
 
 test("tolerates missing login fields", () => {
   const { entries } = mapBitwarden({ items: [{ type: 1, name: "bare" }] });
-  assert.deepEqual(entries, [{ name: "bare", website: "", username: "", password: "", notes: "" }]);
+  assert.deepEqual(entries, [{ name: "bare", website: "", username: "", password: "", totp: "", notes: "" }]);
 });
