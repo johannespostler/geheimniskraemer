@@ -7,6 +7,10 @@ import (
 
 const sessionTTL = 12 * time.Hour
 
+// __Host- prefix: the browser only accepts the cookie over TLS, without a
+// Domain attribute, with Path=/ — pinning it to exactly our origin.
+const sessionCookie = "__Host-gk_session"
+
 func (s *server) createSession(w http.ResponseWriter, userID int64) {
 	id := randToken(32)
 	expires := time.Now().Add(sessionTTL)
@@ -15,7 +19,7 @@ func (s *server) createSession(w http.ResponseWriter, userID int64) {
 		return
 	}
 	http.SetCookie(w, &http.Cookie{
-		Name: "gk_session", Value: id, Path: "/", Expires: expires,
+		Name: sessionCookie, Value: id, Path: "/", Expires: expires,
 		HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode,
 	})
 }
@@ -23,7 +27,7 @@ func (s *server) createSession(w http.ResponseWriter, userID int64) {
 // requireAuth wraps API handlers that need a logged-in user.
 func (s *server) requireAuth(next func(http.ResponseWriter, *http.Request, int64)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ck, err := r.Cookie("gk_session")
+		ck, err := r.Cookie(sessionCookie)
 		if err != nil {
 			http.Error(w, "not authenticated", http.StatusUnauthorized)
 			return
@@ -49,11 +53,11 @@ func (s *server) handleMe(w http.ResponseWriter, r *http.Request, userID int64) 
 }
 
 func (s *server) handleLogout(w http.ResponseWriter, r *http.Request) {
-	if ck, err := r.Cookie("gk_session"); err == nil {
+	if ck, err := r.Cookie(sessionCookie); err == nil {
 		s.db.Exec(`DELETE FROM sessions WHERE id = ?`, ck.Value)
 	}
 	http.SetCookie(w, &http.Cookie{
-		Name: "gk_session", Value: "", Path: "/", MaxAge: -1,
+		Name: sessionCookie, Value: "", Path: "/", MaxAge: -1,
 		HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode,
 	})
 	w.WriteHeader(http.StatusNoContent)

@@ -70,7 +70,7 @@ func call(h http.Handler, method, path, session string, body any) *httptest.Resp
 	req.Header.Set("X-GK-CSRF", "1")
 	req.Header.Set("Content-Type", "application/json")
 	if session != "" {
-		req.AddCookie(&http.Cookie{Name: "gk_session", Value: session})
+		req.AddCookie(&http.Cookie{Name: sessionCookie, Value: session})
 	}
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
@@ -392,5 +392,49 @@ func TestInviteCommandRejectsExistingUser(t *testing.T) {
 	db.QueryRow(`SELECT COUNT(*) FROM invites WHERE username = 'bob'`).Scan(&n)
 	if n != 1 {
 		t.Fatalf("invites for bob = %d", n)
+	}
+}
+
+func TestAuthRateLimit(t *testing.T) {
+	_, h := newTestServer(t)
+	// burst is 30; the 31st rapid request from one IP must be rejected
+	var last int
+	for i := 0; i < 31; i++ {
+		last = call(h, "POST", "/api/login/begin", "", map[string]any{}).Code
+	}
+	if last != http.StatusTooManyRequests {
+		t.Fatalf("31st request = %d, want 429", last)
+	}
+	// authenticated endpoints are not rate limited
+	s, h2 := newTestServer(t)
+	sess := seedSession(t, s.db, seedUser(t, s.db, "alice"))
+	for i := 0; i < 40; i++ {
+		wantStatus(t, call(h2, "GET", "/api/entries", sess, nil), 200)
+	}
+}
+
+func TestClientIP(t *testing.T) {
+	req := httptest.NewRequest("GET", "/", nil)
+	req.RemoteAddr = "203.0.113.7:1234"
+	req.Header.Set("X-Forwarded-For", "198.51.100.1") // must be ignored: peer not loopback
+	if got := clientIP(req); got != "203.0.113.7" {
+		t.Errorf("non-loopback peer: got %q", got)
+	}
+	req.RemoteAddr = "127.0.0.1:5555"
+	if got := clientIP(req); got != "198.51.100.1" {
+		t.Errorf("loopback peer with XFF: got %q", got)
+	}
+	req.Header.Del("X-Forwarded-For")
+	if got := clientIP(req); got != "127.0.0.1" {
+		t.Errorf("loopback peer without XFF: got %q", got)
+	}
+}
+
+func TestAPICacheControl(t *testing.T) {
+	s, h := newTestServer(t)
+	sess := seedSession(t, s.db, seedUser(t, s.db, "alice"))
+	w := call(h, "GET", "/api/entries", sess, nil)
+	if got := w.Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("Cache-Control = %q, want no-store", got)
 	}
 }

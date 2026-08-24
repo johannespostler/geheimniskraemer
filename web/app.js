@@ -4,6 +4,7 @@ import {
   unwrapVaultKey, generateRawVaultKey, encryptEntry, decryptEntry,
   generateRecoveryCode, parseRecoveryCode, deriveRecoveryKEK, deriveRecoveryVerifier,
 } from "/crypto.js";
+import { mapBitwarden } from "/import.js";
 
 let vaultKey = null; // non-extractable CryptoKey while unlocked
 let username = null;
@@ -17,11 +18,16 @@ let unlockCred = null; // {idBytes: Uint8Array, wrapped: Uint8Array}
 const $ = (id) => document.getElementById(id);
 
 async function api(path, body, method) {
-  const res = await fetch(path, {
-    method: method || (body === undefined ? "GET" : "POST"),
-    headers: { "X-GK-CSRF": "1", ...(body !== undefined && { "Content-Type": "application/json" }) },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
+  let res;
+  try {
+    res = await fetch(path, {
+      method: method || (body === undefined ? "GET" : "POST"),
+      headers: { "X-GK-CSRF": "1", ...(body !== undefined && { "Content-Type": "application/json" }) },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  } catch {
+    throw new Error("Cannot reach the server — is it running? Then reload this page.");
+  }
   if (res.status === 401 && vaultKey) { lock(); throw new Error("Session expired — unlock again."); }
   if (!res.ok) throw new Error((await res.text()).trim() || `HTTP ${res.status}`);
   return (res.headers.get("Content-Type") || "").includes("json") ? res.json() : null;
@@ -33,7 +39,7 @@ function show(view) {
 }
 
 function showPanel(panel) {
-  for (const p of ["browser", "editor", "settings"]) $(p).hidden = p !== panel;
+  for (const p of ["browser", "editor", "settings", "import"]) $(p).hidden = p !== panel;
   $("btn-settings").textContent = panel === "settings" ? "Back" : "Settings";
 }
 
@@ -302,6 +308,66 @@ async function provisionVaultKey(credentialId, getPrf) {
   await api("/api/credentials/vault-key", { credentialId, wrapped: b64u(wrapped) });
 }
 
+// --- Bitwarden import ---
+
+async function pickImportFile() {
+  const input = $("import-file");
+  input.value = "";
+  input.onchange = async () => {
+    try {
+      const file = input.files[0];
+      if (!file) return;
+      const { entries: toImport, skipped } = mapBitwarden(JSON.parse(await file.text()));
+      previewImport(toImport, skipped);
+    } catch (err) {
+      fail(err);
+    }
+  };
+  input.click();
+}
+
+function previewImport(toImport, skipped) {
+  const skippedText = Object.entries(skipped)
+    .map(([label, n]) => `${n} ${label}${n > 1 ? "s" : ""}`).join(", ");
+  $("import-summary").textContent =
+    `${toImport.length} entries will be imported as new entries (existing ones are untouched).`
+    + (skippedText ? ` Not supported and skipped: ${skippedText}.` : "");
+  const list = $("import-list");
+  list.replaceChildren();
+  for (const e of toImport) {
+    const li = document.createElement("li");
+    const name = document.createElement("strong");
+    name.textContent = e.name || "(unnamed)";
+    const meta = document.createElement("small");
+    meta.textContent = " " + [e.website, e.username].filter(Boolean).join(" — ");
+    li.append(name, meta);
+    list.append(li);
+  }
+  const run = $("btn-import-run");
+  run.textContent = `Import ${toImport.length} entries`;
+  run.disabled = toImport.length === 0;
+  run.onclick = () => runImport(toImport).catch(fail);
+  showPanel("import");
+}
+
+async function runImport(toImport) {
+  const run = $("btn-import-run");
+  run.disabled = true;
+  let done = 0;
+  // Encrypt + upload in small parallel batches; each entry is its own
+  // ciphertext with a fresh IV, exactly like manual creation.
+  for (let i = 0; i < toImport.length; i += 20) {
+    await Promise.all(toImport.slice(i, i + 20).map(async (data) => {
+      const id = crypto.randomUUID();
+      await api(`/api/entries/${id}`, { ciphertext: b64u(await encryptEntry(vaultKey, data)) }, "PUT");
+      entries.push({ id, data });
+    }));
+    done = Math.min(i + 20, toImport.length);
+    run.textContent = `Importing… ${done}/${toImport.length}`;
+  }
+  showList();
+}
+
 async function regenerateRecovery() {
   if (!confirm("Generate a new recovery code? The old one stops working.")) return;
   const vk = await extractableVaultKey();
@@ -491,6 +557,8 @@ function init() {
   };
   $("btn-add-passkey").onclick = () => addPasskey().catch(fail);
   $("btn-regen-recovery").onclick = () => regenerateRecovery().catch(fail);
+  $("btn-import").onclick = pickImportFile;
+  $("btn-import-cancel").onclick = () => showPanel("settings");
   $("btn-show-recover").onclick = () => show("recover");
   $("btn-recover-cancel").onclick = () => show("login");
   $("btn-recover").onclick = () => recover().catch(fail);

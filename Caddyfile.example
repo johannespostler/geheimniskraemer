@@ -1,0 +1,22 @@
+# Production Caddyfile for Geheimniskrämer.
+#   caddy run --config Caddyfile.example
+# Certificates: automatic via Let's Encrypt (HTTP-01/TLS-ALPN), including renewal.
+# Start gk with a matching origin:
+#   ./gk serve -db /var/lib/gk/gk.db -origin https://vault.example.com
+
+vault.example.com {
+	# Modern TLS: 1.3 only. Every WebAuthn-capable browser supports it;
+	# Caddy's cipher/curve defaults for 1.3 need no tuning.
+	tls {
+		protocols tls1.3
+	}
+
+	header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+
+	# Compress only the static app shell. API responses are base64
+	# ciphertext — incompressible, and never worth a BREACH-shaped risk.
+	@static not path /api/*
+	encode @static zstd gzip
+
+	reverse_proxy 127.0.0.1:8087
+}

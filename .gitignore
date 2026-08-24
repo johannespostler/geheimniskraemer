@@ -2,3 +2,5 @@
 *.db
 *.db-wal
 *.db-shm
+/geheimniskraemer
+/gk-linux-amd64

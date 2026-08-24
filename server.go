@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-webauthn/webauthn/webauthn"
@@ -36,10 +37,16 @@ func cmdServe(args []string) error {
 	}
 	defer db.Close()
 
-	_, handler, err := newServer(db, *origin)
+	s, handler, err := newServer(db, *origin)
 	if err != nil {
 		return err
 	}
+	go func() {
+		for {
+			s.cleanupExpired()
+			time.Sleep(time.Hour)
+		}
+	}()
 
 	srv := &http.Server{
 		Addr:              *listen,
@@ -58,6 +65,8 @@ func newServer(db *sql.DB, origin string) (*server, http.Handler, error) {
 		return nil, nil, err
 	}
 	s := &server{db: db, origin: origin, wa: wa, ceremonies: newCeremonyStore()}
+	// Generous for humans (a login is 2-4 requests), hostile to brute force.
+	authRL := newRateLimiter(15, 30)
 
 	static, err := fs.Sub(webFS, "web")
 	if err != nil {
@@ -66,10 +75,10 @@ func newServer(db *sql.DB, origin string) (*server, http.Handler, error) {
 	mux := http.NewServeMux()
 	mux.Handle("GET /", http.FileServerFS(static))
 	mux.HandleFunc("GET /api/health", s.handleHealth)
-	mux.HandleFunc("POST /api/register/begin", s.handleRegisterBegin)
-	mux.HandleFunc("POST /api/register/finish", s.handleRegisterFinish)
-	mux.HandleFunc("POST /api/login/begin", s.handleLoginBegin)
-	mux.HandleFunc("POST /api/login/finish", s.handleLoginFinish)
+	mux.HandleFunc("POST /api/register/begin", authRL.wrap(s.handleRegisterBegin))
+	mux.HandleFunc("POST /api/register/finish", authRL.wrap(s.handleRegisterFinish))
+	mux.HandleFunc("POST /api/login/begin", authRL.wrap(s.handleLoginBegin))
+	mux.HandleFunc("POST /api/login/finish", authRL.wrap(s.handleLoginFinish))
 	mux.HandleFunc("POST /api/logout", s.handleLogout)
 	mux.HandleFunc("GET /api/me", s.requireAuth(s.handleMe))
 	mux.HandleFunc("POST /api/credentials/vault-key", s.requireAuth(s.handleSetVaultKey))
@@ -79,8 +88,8 @@ func newServer(db *sql.DB, origin string) (*server, http.Handler, error) {
 	mux.HandleFunc("POST /api/credentials/rename", s.requireAuth(s.handleRenameCredential))
 	mux.HandleFunc("POST /api/credentials/delete", s.requireAuth(s.handleDeleteCredential))
 	mux.HandleFunc("POST /api/recovery", s.requireAuth(s.handleSetRecovery))
-	mux.HandleFunc("POST /api/recover/begin", s.handleRecoverBegin)
-	mux.HandleFunc("POST /api/recover/finish", s.handleRecoverFinish)
+	mux.HandleFunc("POST /api/recover/begin", authRL.wrap(s.handleRecoverBegin))
+	mux.HandleFunc("POST /api/recover/finish", authRL.wrap(s.handleRecoverFinish))
 	mux.HandleFunc("GET /api/entries", s.requireAuth(s.handleListEntries))
 	mux.HandleFunc("PUT /api/entries/{id}", s.requireAuth(s.handlePutEntry))
 	mux.HandleFunc("DELETE /api/entries/{id}", s.requireAuth(s.handleDeleteEntry))
@@ -103,8 +112,18 @@ func securityHeaders(next http.Handler) http.Handler {
 		h.Set("Cross-Origin-Opener-Policy", "same-origin")
 		h.Set("Cross-Origin-Resource-Policy", "same-origin")
 		h.Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+		// API responses (wrapped keys, ciphertext) must never land in any
+		// browser or intermediary cache.
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			h.Set("Cache-Control", "no-store")
+		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func (s *server) cleanupExpired() {
+	s.db.Exec(`DELETE FROM sessions WHERE expires_at < unixepoch()`)
+	s.db.Exec(`DELETE FROM invites WHERE expires_at < unixepoch()`)
 }
 
 func (s *server) handleHealth(w http.ResponseWriter, r *http.Request) {

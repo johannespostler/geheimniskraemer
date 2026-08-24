@@ -99,6 +99,23 @@
         <div class="toolbar">
           <button id="btn-regen-recovery" class="ghost">Generate new recovery code</button>
         </div>
+        <h2>Import</h2>
+        <p>Bitwarden <em>unencrypted JSON</em> export. The file is parsed and encrypted
+          in your browser; the server only receives ciphertext.</p>
+        <div class="toolbar">
+          <input id="import-file" type="file" accept=".json,application/json" hidden>
+          <button id="btn-import" class="ghost">Import from Bitwarden…</button>
+        </div>
+      </div>
+
+      <div id="import" hidden>
+        <h2>Import preview</h2>
+        <p id="import-summary"></p>
+        <ul id="import-list" class="scroll-list"></ul>
+        <div class="toolbar">
+          <button id="btn-import-run"></button>
+          <button id="btn-import-cancel" class="ghost">Cancel</button>
+        </div>
       </div>
     </section>
     <dialog id="guide">
