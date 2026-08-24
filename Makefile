@@ -1,4 +1,4 @@
-.PHONY: build test vet
+.PHONY: build test e2e vet
 
 build:
 	go build -o gk .
@@ -6,6 +6,10 @@ build:
 test:
 	go test .
 	node --test tests/*.test.mjs
+
+# Needs: npm install && npx playwright install chromium
+e2e:
+	npx playwright test
 
 vet:
 	go vet ./...

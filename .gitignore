@@ -4,3 +4,6 @@
 *.db-shm
 /geheimniskraemer
 /gk-linux-amd64
+/node_modules
+/test-results
+/playwright-report

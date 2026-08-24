@@ -393,7 +393,11 @@ async function runImport(toImport) {
 }
 
 async function regenerateRecovery() {
-  if (!confirm("Generate a new recovery code? The old one stops working.")) return;
+  // extractableVaultKey only accepts the passkey this session was unlocked
+  // with (its wrapped vault key is the one we hold) — say so up front.
+  await guide("New recovery code",
+    "The old code stops working. Confirm with the passkey you unlocked the vault with just now — the browser will not offer your other passkeys here.",
+    { button: "Generate" });
   const vk = await extractableVaultKey();
   const code = generateRecoveryCode();
   const wrappedRec = await wrapVaultKey(await deriveRecoveryKEK(parseRecoveryCode(code)), vk);
@@ -475,14 +479,15 @@ function renderList() {
   list.replaceChildren();
   for (const e of sortedFiltered()) {
     const li = document.createElement("li");
-    const info = document.createElement("button");
+    const info = document.createElement("div");
     info.className = "entry-info";
-    info.onclick = () => openEditor(e);
-    const name = document.createElement("strong");
-    name.textContent = e.data.name || "(unnamed)";
-    const site = document.createElement("small");
-    site.textContent = e.data.website || "";
-    info.append(name, site);
+    const name = document.createElement("button");
+    name.className = "entry-name";
+    name.onclick = () => openEditor(e);
+    const strong = document.createElement("strong");
+    strong.textContent = e.data.name || "(unnamed)";
+    name.append(strong);
+    info.append(name, siteLine(e.data.website));
     li.append(info,
       copyButton("user", () => e.data.username),
       copyButton("pass", () => e.data.password));
@@ -490,6 +495,24 @@ function renderList() {
     list.append(li);
   }
   $("empty").hidden = entries.length > 0;
+}
+
+// The website as a link when it parses as a web address, plain text otherwise.
+// The scheme is optional in the field ("example.com"), so default to https.
+function siteLine(website) {
+  const small = document.createElement("small");
+  small.textContent = website || "";
+  if (!website) return small;
+  let url = null;
+  try { url = new URL(/^[a-z][a-z0-9+.-]*:/i.test(website) ? website : `https://${website}`); } catch {}
+  if (!url || (url.protocol !== "https:" && url.protocol !== "http:")) return small;
+  const a = document.createElement("a");
+  a.className = "entry-site";
+  a.href = url.href;
+  a.target = "_blank";
+  a.rel = "noopener noreferrer";
+  a.append(small);
+  return a;
 }
 
 const COPY_ICON = `<svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" d="M9 4h11v13M4 8h11v13H4z" stroke-linejoin="round"/></svg>`;
