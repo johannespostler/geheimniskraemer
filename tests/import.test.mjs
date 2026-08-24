@@ -42,6 +42,20 @@ test("extra URIs land in notes, TOTP in its own field", () => {
   assert.equal(entries[0].totp, "otpauth://totp/x?secret=ABC");
 });
 
+test("lifts a legacy 'TOTP: …' notes line into the totp field", () => {
+  const { entries } = mapBitwarden({
+    items: [
+      { type: 1, name: "A", notes: "keep this\n\nTOTP: otpauth://totp/a?secret=ABC\n\nand this", login: {} },
+      // login.totp wins; the notes line is left alone in that case
+      { type: 1, name: "B", notes: "TOTP: JBSWY3DP", login: { totp: "OTHER234" } },
+    ],
+  });
+  assert.equal(entries[0].totp, "otpauth://totp/a?secret=ABC");
+  assert.equal(entries[0].notes, "keep this\n\nand this");
+  assert.equal(entries[1].totp, "OTHER234");
+  assert.equal(entries[1].notes, "TOTP: JBSWY3DP");
+});
+
 test("maps secure notes, counts unsupported types", () => {
   const { entries, skipped } = mapBitwarden({
     items: [

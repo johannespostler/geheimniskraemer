@@ -594,6 +594,10 @@ function init() {
   $("search").oninput = renderList;
   $("f-totp").oninput = updateTotpPreview;
   setInterval(updateTotpPreview, 1000);
+  $("totp-row").append(copyButton("copy", () => {
+    const secret = $("f-totp").value.trim();
+    return secret ? totpCode(secret) : "";
+  }));
   $("btn-settings").onclick = () => {
     if ($("settings").hidden) openSettings().catch(fail);
     else showList();

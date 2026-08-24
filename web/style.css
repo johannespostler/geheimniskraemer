@@ -70,6 +70,8 @@ button.icon {
   white-space: nowrap;
   padding: 0 0.3rem;
 }
+/* The secret is write-once and rarely looked at — keep the field modest. */
+#f-totp { flex: 0 1 14rem; width: auto; }
 
 #list {
   list-style: none;
