@@ -11,6 +11,12 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
+# Shared proxy secret so gk only trusts X-Forwarded-For coming from Caddy.
+# Create /etc/gk.env (mode 0600) with one line:  GK_PROXY_SECRET=<random hex>
+# and put the SAME value in the Caddyfile's `header_up X-GK-Proxy`. Without
+# this, a local process reaching 127.0.0.1:8087 could forge XFF and evade the
+# auth rate limiter — a real risk on any multi-user host.
+EnvironmentFile=/etc/gk.env
 ExecStart=/usr/local/bin/gk serve -db /var/lib/gk/gk.db -origin https://vault.example.com
 Restart=on-failure
 

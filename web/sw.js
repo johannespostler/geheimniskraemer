@@ -2,10 +2,10 @@
 // immediately; cache is the fallback when offline. API responses are never
 // cached — the vault exists only encrypted on the server and decrypted in
 // page memory, never in cache storage.
-const CACHE = "gk-shell-v4";
+const CACHE = "gk-shell-v5";
 const SHELL = [
   "/", "/style.css", "/app.js", "/crypto.js", "/import.js", "/totp.js", "/icon.svg", "/manifest.json",
-  "/icon-192.png", "/icon-512.png", "/apple-touch-icon.png",
+  "/icon-192.png", "/icon-512.png", "/icon-maskable-192.png", "/icon-maskable-512.png", "/apple-touch-icon.png",
 ];
 
 self.addEventListener("install", (e) => {

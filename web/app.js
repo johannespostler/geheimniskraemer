@@ -57,6 +57,21 @@ function supported() {
 
 // --- auth (unchanged from milestone 2) ---
 
+// PRF can fail in two distinct ways and the fix differs:
+// - the BROWSER never processed the extension (getClientExtensionResults()
+//   has no `prf` key at all) — e.g. Firefox on Android, which hands WebAuthn
+//   to Google Play services without the PRF extension. Retrying or switching
+//   authenticators cannot help; only another browser can.
+// - the AUTHENTICATOR does not implement hmac-secret — another one can help.
+function prfUnsupportedError(ext) {
+  if (ext.prf === undefined) {
+    return new Error("This browser cannot use the PRF extension needed to encrypt your vault "
+      + "(a known limitation of e.g. Firefox on Android). Your passkey is fine — "
+      + "try Chrome on Android or a desktop browser.");
+  }
+  return new Error("This authenticator does not support the PRF extension needed to encrypt your vault; pick another one.");
+}
+
 // Create a passkey, asking the authenticator to evaluate PRF right away.
 // Returns {cred, prfOut} — prfOut is null if this authenticator only
 // evaluates PRF on assertions (caller falls back to getPRFOutput, which
@@ -65,10 +80,9 @@ async function createPasskey(optionsJSON) {
   const options = PublicKeyCredential.parseCreationOptionsFromJSON(optionsJSON);
   options.extensions = { ...options.extensions, prf: { eval: { first: PRF_SALT } } };
   const cred = await navigator.credentials.create({ publicKey: options });
-  const prf = cred.getClientExtensionResults().prf;
-  if (!prf?.enabled && !prf?.results) {
-    throw new Error("This authenticator does not support the PRF extension; pick another one.");
-  }
+  const ext = cred.getClientExtensionResults();
+  const prf = ext.prf;
+  if (!prf?.enabled && !prf?.results) throw prfUnsupportedError(ext);
   return { cred, prfOut: prf.results?.first ? new Uint8Array(prf.results.first) : null };
 }
 
@@ -81,8 +95,9 @@ async function getPRFOutput(credentialIdBytes) {
       extensions: { prf: { eval: { first: PRF_SALT } } },
     },
   });
-  const out = cred.getClientExtensionResults().prf?.results?.first;
-  if (!out) throw new Error("This passkey does not support the PRF extension.");
+  const ext = cred.getClientExtensionResults();
+  const out = ext.prf?.results?.first;
+  if (!out) throw prfUnsupportedError(ext);
   return new Uint8Array(out);
 }
 
@@ -135,7 +150,7 @@ async function uploadRecovery(code, wrappedRec) {
 
 function showRecoveryCode(code, onDone) {
   $("code-text").textContent = code;
-  $("btn-code-copy").onclick = () => navigator.clipboard.writeText(code);
+  $("btn-code-copy").onclick = () => copySecret(code).catch(fail);
   $("btn-code-done").onclick = () => { Promise.resolve(onDone()).catch(fail); };
   show("recovery-code");
 }
@@ -150,6 +165,13 @@ async function login() {
   username = finish.username;
 
   let prfOut = ext.prf?.results?.first ? new Uint8Array(ext.prf.results.first) : null;
+  if (!prfOut && ext.prf === undefined) {
+    // The browser dropped the extension entirely — a second ceremony would
+    // just re-prompt the authenticator (twice per attempt over NFC) and fail
+    // the same way. Bail out with the real reason instead.
+    await api("/api/logout", {}).catch(() => {});
+    throw prfUnsupportedError(ext);
+  }
   if (!prfOut) prfOut = await getPRFOutput(cred.rawId);
   const kek = await deriveKEK(prfOut);
   prfOut.fill(0);
@@ -515,6 +537,24 @@ function siteLine(website) {
   return a;
 }
 
+// Write a secret to the clipboard, tagging it as sensitive where the platform
+// supports it. The async ClipboardItem path lets browsers that honor it (e.g.
+// Android via EXTRA_IS_SENSITIVE, some password-manager integrations) keep the
+// value out of clipboard history and previews; where they don't, this is a
+// plain copy. Either way it's backstopped by the 30s auto-clear in copyButton.
+async function copySecret(text) {
+  const value = text || "";
+  try {
+    if (window.ClipboardItem && navigator.clipboard.write) {
+      await navigator.clipboard.write([
+        new ClipboardItem({ "text/plain": new Blob([value], { type: "text/plain" }) }),
+      ]);
+      return;
+    }
+  } catch { /* fall through to writeText */ }
+  await navigator.clipboard.writeText(value);
+}
+
 const COPY_ICON = `<svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" d="M9 4h11v13M4 8h11v13H4z" stroke-linejoin="round"/></svg>`;
 
 function copyButton(label, getValue) {
@@ -524,7 +564,7 @@ function copyButton(label, getValue) {
   btn.onclick = async () => {
     try {
       // getValue may be async (TOTP codes are computed on demand).
-      await navigator.clipboard.writeText((await getValue()) || "");
+      await copySecret(await getValue());
     } catch (err) { fail(err); return; }
     btn.textContent = "✓";
     setTimeout(() => { btn.innerHTML = `${label} ${COPY_ICON}`; }, 1200);

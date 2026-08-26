@@ -14,6 +14,10 @@ var entryIDRe = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 
 const maxEntrySize = 64 * 1024
 
+// Per-user quota: bounds an authenticated (or compromised) account's ability
+// to exhaust the disk backing the SQLite file. Generous for a personal vault.
+const maxEntriesPerUser = 1000
+
 func (s *server) handleListEntries(w http.ResponseWriter, r *http.Request, userID int64) {
 	rows, err := s.db.Query(`SELECT id, ciphertext, updated_at FROM entries WHERE user_id = ?`, userID)
 	if err != nil {
@@ -61,6 +65,19 @@ func (s *server) handlePutEntry(w http.ResponseWriter, r *http.Request, userID i
 	if err != nil || len(ct) < 28 || len(ct) > maxEntrySize { // 12B IV + 16B GCM tag minimum
 		http.Error(w, "bad ciphertext", http.StatusBadRequest)
 		return
+	}
+	// Enforce the per-user quota, but only for genuinely new entries so that
+	// updating an existing one never trips the limit. Concurrent creates can
+	// overshoot slightly; that's an acceptable soft cap, not a hard bound.
+	var exists bool
+	s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM entries WHERE id = ? AND user_id = ?)`, id, userID).Scan(&exists)
+	if !exists {
+		var count int
+		s.db.QueryRow(`SELECT COUNT(*) FROM entries WHERE user_id = ?`, userID).Scan(&count)
+		if count >= maxEntriesPerUser {
+			http.Error(w, "entry limit reached", http.StatusInsufficientStorage)
+			return
+		}
 	}
 	// Upsert scoped to the user: an id owned by someone else must not be
 	// touched, so the conflict-update re-checks user_id.

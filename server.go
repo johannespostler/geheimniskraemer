@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -29,6 +30,8 @@ func cmdServe(args []string) error {
 	listen := fl.String("listen", "127.0.0.1:8087", "listen address (keep local; put Caddy in front)")
 	dbPath := fl.String("db", "gk.db", "path to SQLite database")
 	origin := fl.String("origin", "https://localhost", "external origin as seen by browsers (WebAuthn RP origin)")
+	proxySecret := fl.String("proxy-secret", os.Getenv("GK_PROXY_SECRET"),
+		"shared secret the proxy sends in X-GK-Proxy; required to trust X-Forwarded-For (defaults to $GK_PROXY_SECRET)")
 	fl.Parse(args)
 
 	db, err := openDB(*dbPath)
@@ -37,7 +40,7 @@ func cmdServe(args []string) error {
 	}
 	defer db.Close()
 
-	s, handler, err := newServer(db, *origin)
+	s, handler, err := newServer(db, *origin, *proxySecret)
 	if err != nil {
 		return err
 	}
@@ -59,14 +62,14 @@ func cmdServe(args []string) error {
 	return srv.ListenAndServe()
 }
 
-func newServer(db *sql.DB, origin string) (*server, http.Handler, error) {
+func newServer(db *sql.DB, origin, proxySecret string) (*server, http.Handler, error) {
 	wa, err := newWebAuthn(origin)
 	if err != nil {
 		return nil, nil, err
 	}
 	s := &server{db: db, origin: origin, wa: wa, ceremonies: newCeremonyStore()}
 	// Generous for humans (a login is 2-4 requests), hostile to brute force.
-	authRL := newRateLimiter(15, 30)
+	authRL := newRateLimiter(15, 30, proxySecret)
 
 	static, err := fs.Sub(webFS, "web")
 	if err != nil {

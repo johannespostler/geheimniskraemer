@@ -94,9 +94,18 @@ func (c *ceremonyStore) take(r *http.Request) (ceremony, bool) {
 }
 
 func randToken(n int) string {
+	return base64.RawURLEncoding.EncodeToString(randBytes(n))
+}
+
+// randBytes returns n cryptographically random bytes. A failure of the
+// system CSPRNG is unrecoverable and must never silently yield a low-entropy
+// token (session id, invite, user handle), so we panic rather than proceed.
+func randBytes(n int) []byte {
 	b := make([]byte, n)
-	rand.Read(b)
-	return base64.RawURLEncoding.EncodeToString(b)
+	if _, err := rand.Read(b); err != nil {
+		panic("gk: crypto/rand unavailable: " + err.Error())
+	}
+	return b
 }
 
 // --- registration ---
@@ -116,8 +125,7 @@ func (s *server) handleRegisterBegin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid or expired invite", http.StatusForbidden)
 		return
 	}
-	handle := make([]byte, 32)
-	rand.Read(handle)
+	handle := randBytes(32)
 	user := &waUser{handle: handle, name: username}
 	options, session, err := s.wa.BeginRegistration(user,
 		webauthn.WithAuthenticatorSelection(protocol.AuthenticatorSelection{

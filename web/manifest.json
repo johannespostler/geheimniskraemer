@@ -1,6 +1,6 @@
 {
   "name": "Geheimniskrämer",
-  "short_name": "Vault",
+  "short_name": "Geheimniskrämer",
   "description": "Self-hosted passkey password manager",
   "start_url": "/",
   "scope": "/",
@@ -8,8 +8,10 @@
   "background_color": "#16181c",
   "theme_color": "#3a5fcd",
   "icons": [
-    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" },
-    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png" },
-    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml" }
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-maskable-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+    { "src": "/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
   ]
 }

@@ -21,7 +21,7 @@ func newTestServer(t *testing.T) (*server, http.Handler) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })
-	s, h, err := newServer(db, "https://localhost")
+	s, h, err := newServer(db, "https://localhost", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,12 +40,12 @@ func seedUser(t *testing.T, db *sql.DB, name string) int64 {
 
 func seedSession(t *testing.T, db *sql.DB, userID int64) string {
 	t.Helper()
-	id := randToken(32)
+	token := randToken(32)
 	if _, err := db.Exec(`INSERT INTO sessions (id, user_id, expires_at) VALUES (?, ?, ?)`,
-		id, userID, time.Now().Add(time.Hour).Unix()); err != nil {
+		hashToken(token), userID, time.Now().Add(time.Hour).Unix()); err != nil {
 		t.Fatal(err)
 	}
-	return id
+	return token
 }
 
 func seedCredential(t *testing.T, db *sql.DB, userID int64, credID string, wrapped []byte) {
@@ -417,16 +417,38 @@ func TestClientIP(t *testing.T) {
 	req := httptest.NewRequest("GET", "/", nil)
 	req.RemoteAddr = "203.0.113.7:1234"
 	req.Header.Set("X-Forwarded-For", "198.51.100.1") // must be ignored: peer not loopback
-	if got := clientIP(req); got != "203.0.113.7" {
+	if got := clientIP(req, ""); got != "203.0.113.7" {
 		t.Errorf("non-loopback peer: got %q", got)
 	}
 	req.RemoteAddr = "127.0.0.1:5555"
-	if got := clientIP(req); got != "198.51.100.1" {
-		t.Errorf("loopback peer with XFF: got %q", got)
+	if got := clientIP(req, ""); got != "198.51.100.1" {
+		t.Errorf("loopback peer with XFF (no secret): got %q", got)
 	}
 	req.Header.Del("X-Forwarded-For")
-	if got := clientIP(req); got != "127.0.0.1" {
+	if got := clientIP(req, ""); got != "127.0.0.1" {
 		t.Errorf("loopback peer without XFF: got %q", got)
+	}
+}
+
+// With a proxy secret configured, XFF is honored only when the matching
+// X-GK-Proxy header is present — a local client that reaches the listener
+// directly cannot forge per-request buckets.
+func TestClientIPProxySecret(t *testing.T) {
+	const secret = "s3cret"
+	req := httptest.NewRequest("GET", "/", nil)
+	req.RemoteAddr = "127.0.0.1:5555"
+	req.Header.Set("X-Forwarded-For", "198.51.100.1")
+
+	if got := clientIP(req, secret); got != "127.0.0.1" {
+		t.Errorf("loopback peer, no proxy header: got %q, want socket peer", got)
+	}
+	req.Header.Set("X-GK-Proxy", "wrong")
+	if got := clientIP(req, secret); got != "127.0.0.1" {
+		t.Errorf("loopback peer, wrong proxy secret: got %q, want socket peer", got)
+	}
+	req.Header.Set("X-GK-Proxy", secret)
+	if got := clientIP(req, secret); got != "198.51.100.1" {
+		t.Errorf("loopback peer, correct proxy secret: got %q, want XFF", got)
 	}
 }
 

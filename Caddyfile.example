@@ -1,7 +1,8 @@
 # Production Caddyfile for Geheimniskrämer.
 #   caddy run --config Caddyfile.example
 # Certificates: automatic via Let's Encrypt (HTTP-01/TLS-ALPN), including renewal.
-# Start gk with a matching origin:
+# Start gk with a matching origin and the SAME proxy secret this file sends:
+#   export GK_PROXY_SECRET=$(openssl rand -hex 32)   # share with both processes
 #   ./gk serve -db /var/lib/gk/gk.db -origin https://vault.example.com
 
 vault.example.com {
@@ -13,10 +14,29 @@ vault.example.com {
 
 	header Strict-Transport-Security "max-age=31536000; includeSubDomains"
 
+	# Caddy does not log access by default. If you enable it, strip the query
+	# string: registration invites arrive as /?invite=<token>, and a token in
+	# an access log is a live credential until it is used or expires.
+	log {
+		output file /var/log/gk-access.log
+		format filter {
+			request>uri query {
+				delete invite
+			}
+		}
+	}
+
 	# Compress only the static app shell. API responses are base64
 	# ciphertext — incompressible, and never worth a BREACH-shaped risk.
 	@static not path /api/*
 	encode @static zstd gzip
 
-	reverse_proxy 127.0.0.1:8087
+	reverse_proxy 127.0.0.1:8087 {
+		# Overwrite (not append) X-Forwarded-For with the real peer as Caddy
+		# saw it, so a client cannot smuggle a spoofed value through us. The
+		# shared secret proves to gk that this XFF came from Caddy and not
+		# from some other process on the loopback interface.
+		header_up X-Forwarded-For {remote_host}
+		header_up X-GK-Proxy {$GK_PROXY_SECRET}
+	}
 }

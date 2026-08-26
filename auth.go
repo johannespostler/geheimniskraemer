@@ -1,25 +1,35 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
 	"net/http"
 	"time"
 )
 
 const sessionTTL = 12 * time.Hour
 
+// hashToken is what we persist for bearer tokens (session ids): the cookie
+// carries the raw token, the DB stores only its SHA-256. A read of the DB
+// (leaked backup, stray copy) then yields no usable session cookies.
+func hashToken(t string) string {
+	h := sha256.Sum256([]byte(t))
+	return base64.RawURLEncoding.EncodeToString(h[:])
+}
+
 // __Host- prefix: the browser only accepts the cookie over TLS, without a
 // Domain attribute, with Path=/ — pinning it to exactly our origin.
 const sessionCookie = "__Host-gk_session"
 
 func (s *server) createSession(w http.ResponseWriter, userID int64) {
-	id := randToken(32)
+	token := randToken(32)
 	expires := time.Now().Add(sessionTTL)
 	if _, err := s.db.Exec(`INSERT INTO sessions (id, user_id, expires_at) VALUES (?, ?, ?)`,
-		id, userID, expires.Unix()); err != nil {
+		hashToken(token), userID, expires.Unix()); err != nil {
 		return
 	}
 	http.SetCookie(w, &http.Cookie{
-		Name: sessionCookie, Value: id, Path: "/", Expires: expires,
+		Name: sessionCookie, Value: token, Path: "/", Expires: expires,
 		HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode,
 	})
 }
@@ -34,7 +44,7 @@ func (s *server) requireAuth(next func(http.ResponseWriter, *http.Request, int64
 		}
 		var userID int64
 		err = s.db.QueryRow(`SELECT user_id FROM sessions WHERE id = ? AND expires_at > unixepoch()`,
-			ck.Value).Scan(&userID)
+			hashToken(ck.Value)).Scan(&userID)
 		if err != nil {
 			http.Error(w, "not authenticated", http.StatusUnauthorized)
 			return
@@ -54,7 +64,7 @@ func (s *server) handleMe(w http.ResponseWriter, r *http.Request, userID int64) 
 
 func (s *server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	if ck, err := r.Cookie(sessionCookie); err == nil {
-		s.db.Exec(`DELETE FROM sessions WHERE id = ?`, ck.Value)
+		s.db.Exec(`DELETE FROM sessions WHERE id = ?`, hashToken(ck.Value))
 	}
 	http.SetCookie(w, &http.Cookie{
 		Name: sessionCookie, Value: "", Path: "/", MaxAge: -1,

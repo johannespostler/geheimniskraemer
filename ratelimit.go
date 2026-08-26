@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/subtle"
 	"net"
 	"net/http"
 	"strings"
@@ -12,10 +13,11 @@ import (
 // (login, register, recover). Authenticated endpoints don't need it: a valid
 // session is already proof of a passkey ceremony.
 type rateLimiter struct {
-	mu      sync.Mutex
-	buckets map[string]*bucket
-	rate    float64 // tokens per second
-	burst   float64
+	mu          sync.Mutex
+	buckets     map[string]*bucket
+	rate        float64 // tokens per second
+	burst       float64
+	proxySecret string // shared secret proving X-Forwarded-For came from our proxy
 }
 
 type bucket struct {
@@ -23,8 +25,8 @@ type bucket struct {
 	last   time.Time
 }
 
-func newRateLimiter(perMinute, burst float64) *rateLimiter {
-	return &rateLimiter{buckets: make(map[string]*bucket), rate: perMinute / 60, burst: burst}
+func newRateLimiter(perMinute, burst float64, proxySecret string) *rateLimiter {
+	return &rateLimiter{buckets: make(map[string]*bucket), rate: perMinute / 60, burst: burst, proxySecret: proxySecret}
 }
 
 func (rl *rateLimiter) allow(key string) bool {
@@ -55,7 +57,7 @@ func (rl *rateLimiter) allow(key string) bool {
 
 func (rl *rateLimiter) wrap(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !rl.allow(clientIP(r)) {
+		if !rl.allow(clientIP(r, rl.proxySecret)) {
 			w.Header().Set("Retry-After", "60")
 			http.Error(w, "too many requests", http.StatusTooManyRequests)
 			return
@@ -64,14 +66,21 @@ func (rl *rateLimiter) wrap(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// clientIP trusts X-Forwarded-For only when the direct peer is loopback,
-// i.e. the Caddy proxy on the same host. Anything else uses the socket peer.
-func clientIP(r *http.Request) string {
+// clientIP resolves the client's IP for rate-limiting. X-Forwarded-For is
+// honored only when the request demonstrably came through our own proxy;
+// otherwise the socket peer is used, so a client that reaches the listener
+// directly cannot forge a fresh bucket per request by spoofing the header.
+//
+// With proxySecret set (recommended, and required on any host where another
+// local process can reach the listener), XFF is trusted only when the proxy
+// presents the matching X-GK-Proxy header. With it empty, we fall back to
+// trusting a loopback peer — safe only on a single-tenant host.
+func clientIP(r *http.Request, proxySecret string) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		host = r.RemoteAddr
 	}
-	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+	if trustProxyHeaders(r, host, proxySecret) {
 		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 			first, _, _ := strings.Cut(xff, ",")
 			if ip := net.ParseIP(strings.TrimSpace(first)); ip != nil {
@@ -80,4 +89,15 @@ func clientIP(r *http.Request) string {
 		}
 	}
 	return host
+}
+
+func trustProxyHeaders(r *http.Request, host, proxySecret string) bool {
+	ip := net.ParseIP(host)
+	if ip == nil || !ip.IsLoopback() {
+		return false
+	}
+	if proxySecret == "" {
+		return true // back-compat: loopback peer trusted, single-tenant only
+	}
+	return subtle.ConstantTimeCompare([]byte(r.Header.Get("X-GK-Proxy")), []byte(proxySecret)) == 1
 }

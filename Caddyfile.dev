@@ -4,5 +4,10 @@
 #   go run . serve -origin https://localhost
 localhost {
 	header Strict-Transport-Security "max-age=31536000"
-	reverse_proxy 127.0.0.1:8087
+	# Single-tenant dev box: no proxy secret needed (gk falls back to trusting
+	# a loopback peer). We still overwrite XFF with the real peer so the
+	# rate-limiter sees per-client IPs rather than a client-supplied value.
+	reverse_proxy 127.0.0.1:8087 {
+		header_up X-Forwarded-For {remote_host}
+	}
 }
