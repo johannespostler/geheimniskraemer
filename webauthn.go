@@ -51,11 +51,13 @@ type ceremonyStore struct {
 
 type ceremony struct {
 	data    *webauthn.SessionData
-	kind    string // "register", "login", "add", "recover"
+	kind    string // "register", "login", "add", "recover", "totp", "totp-enroll"
 	invite  string // invite token, registration only
-	name    string // username, registration only
+	name    string // username, registration and totp
 	handle  []byte // user handle, registration only
-	userID  int64  // add/recover only
+	userID  int64  // add/recover/totp/totp-enroll only
+	credID  string // totp only: the credential the paused login asserted
+	secret  []byte // totp-enroll only: candidate secret, not yet in DB
 	expires time.Time
 }
 
@@ -231,16 +233,30 @@ func (s *server) handleLoginFinish(w http.ResponseWriter, r *http.Request) {
 	if credJSON, err := json.Marshal(cred); err == nil {
 		s.db.Exec(`UPDATE credentials SET credential_data = ? WHERE id = ? AND user_id = ?`, credJSON, credID, u.id)
 	}
+	// Step-up: a synced (backup-eligible) passkey lives in a cloud account we
+	// don't trust on its own — if the user opted into TOTP, pause here. No
+	// session, no wrapped key until the code (or a trusted device) checks out.
+	if _, enrolled := s.userTOTP(u.id); enrolled && cred.Flags.BackupEligible && !s.isTrustedDevice(r, u.id) {
+		s.ceremonies.put(w, ceremony{kind: "totp", userID: u.id, credID: credID, name: u.name})
+		writeJSON(w, http.StatusOK, map[string]any{"totpRequired": true, "username": u.name})
+		return
+	}
+	s.finishLogin(w, u.id, credID, u.name)
+}
+
+// finishLogin issues the session and releases the credential's wrapped vault
+// key — the tail of every successful login, whether single-step or after TOTP.
+func (s *server) finishLogin(w http.ResponseWriter, userID int64, credID, username string) {
 	var wrapped []byte
 	if err := s.db.QueryRow(`SELECT wrapped_vault_key FROM credentials WHERE id = ? AND user_id = ?`,
-		credID, u.id).Scan(&wrapped); err != nil {
+		credID, userID).Scan(&wrapped); err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	var hasEntries bool
-	s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM entries WHERE user_id = ?)`, u.id).Scan(&hasEntries)
-	s.createSession(w, u.id)
-	resp := map[string]any{"username": u.name, "credentialId": credID, "wrappedVaultKey": nil, "hasEntries": hasEntries}
+	s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM entries WHERE user_id = ?)`, userID).Scan(&hasEntries)
+	s.createSession(w, userID)
+	resp := map[string]any{"username": username, "credentialId": credID, "wrappedVaultKey": nil, "hasEntries": hasEntries}
 	if len(wrapped) > 0 {
 		resp["wrappedVaultKey"] = base64.RawURLEncoding.EncodeToString(wrapped)
 	}

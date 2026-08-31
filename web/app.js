@@ -6,6 +6,7 @@ import {
 } from "/crypto.js";
 import { mapBitwarden } from "/import.js";
 import { totpCode, totpRemaining } from "/totp.js";
+import { qrMatrix } from "/qr.js";
 
 let vaultKey = null; // non-extractable CryptoKey while unlocked
 let username = null;
@@ -18,12 +19,12 @@ let unlockCred = null; // {idBytes: Uint8Array, wrapped: Uint8Array}
 
 const $ = (id) => document.getElementById(id);
 
-async function api(path, body, method) {
+async function api(path, body, method, headers) {
   let res;
   try {
     res = await fetch(path, {
       method: method || (body === undefined ? "GET" : "POST"),
-      headers: { "X-GK-CSRF": "1", ...(body !== undefined && { "Content-Type": "application/json" }) },
+      headers: { "X-GK-CSRF": "1", ...(body !== undefined && { "Content-Type": "application/json" }), ...headers },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
   } catch {
@@ -161,7 +162,11 @@ async function login() {
   options.extensions = { ...options.extensions, prf: { eval: { first: PRF_SALT } } };
   const cred = await navigator.credentials.get({ publicKey: options });
   const ext = cred.getClientExtensionResults();
-  const finish = await api("/api/login/finish", cred.toJSON());
+  let finish = await api("/api/login/finish", cred.toJSON());
+  // Synced passkey on a TOTP-enrolled account: the server held back the
+  // session and wrapped key until a code checks out. The PRF output from the
+  // assertion above stays valid — only the server's release is gated.
+  if (finish.totpRequired) finish = await loginTOTP();
   username = finish.username;
 
   let prfOut = ext.prf?.results?.first ? new Uint8Array(ext.prf.results.first) : null;
@@ -194,6 +199,39 @@ async function login() {
   }
   unlockCred = { idBytes: new Uint8Array(cred.rawId), wrapped };
   await enterVault();
+}
+
+// Modal prompt for the login step-up: 6-digit code + "trust this device".
+// A wrong code is retryable in place (the server re-arms the pending login);
+// resolves with the same payload /api/login/finish returns.
+function loginTOTP() {
+  return new Promise((resolve, reject) => {
+    const dlg = $("totp-login");
+    const codeEl = $("totp-login-code");
+    $("totp-login-error").textContent = "";
+    codeEl.value = "";
+    $("totp-login-trust").checked = false;
+    const submit = async () => {
+      const code = codeEl.value.trim();
+      if (!/^\d{6}$/.test(code)) { $("totp-login-error").textContent = "Enter the 6-digit code."; return; }
+      try {
+        const res = await api("/api/login/totp", { code, trust: $("totp-login-trust").checked });
+        dlg.close();
+        resolve(res);
+      } catch (err) {
+        $("totp-login-error").textContent = err.message;
+        codeEl.value = "";
+        codeEl.focus();
+      }
+    };
+    $("btn-totp-login").onclick = submit;
+    codeEl.onkeydown = (e) => { if (e.key === "Enter") submit(); };
+    const cancel = () => { dlg.close(); reject(new Error("Cancelled.")); };
+    $("btn-totp-login-cancel").onclick = cancel;
+    dlg.oncancel = cancel;
+    dlg.showModal();
+    codeEl.focus();
+  });
 }
 
 // Recover access with username + recovery code: registers a fresh passkey,
@@ -248,6 +286,7 @@ async function openSettings() {
     name.textContent = c.name || `passkey ${c.id.slice(0, 8)}`;
     const meta = document.createElement("small");
     meta.textContent = new Date(c.createdAt * 1000).toLocaleDateString()
+      + (c.backupEligible ? " — synced" : " — device-bound")
       + (c.hasVaultKey ? "" : " — no vault key, cannot unlock");
     label.append(name, meta);
     let fix = null;
@@ -288,9 +327,123 @@ async function openSettings() {
     li.append(label, ...(fix ? [fix] : []), rename, del);
     list.append(li);
   }
+  $("totp-status").textContent = info.totpEnabled
+    ? "Enabled — unlocking with a synced passkey asks for a code."
+    : "Off — synced passkeys unlock without a second factor.";
+  const toggle = $("btn-totp-toggle");
+  toggle.textContent = info.totpEnabled ? "Disable…" : "Enable…";
+  toggle.onclick = () => (info.totpEnabled ? disableTotp() : enrollTotp()).catch(fail);
+  $("trusted-devices").hidden = !info.totpEnabled;
+  if (info.totpEnabled) await renderTrustedDevices();
+
   $("recovery-status").textContent = info.hasRecovery
     ? "A recovery code is set." : "No recovery code set — lose all passkeys and the vault is gone.";
   showPanel("settings");
+}
+
+async function renderTrustedDevices() {
+  const devs = await api("/api/trusted-devices");
+  const list = $("trust-list");
+  list.replaceChildren();
+  for (const d of devs) {
+    const li = document.createElement("li");
+    const label = document.createElement("span");
+    label.className = "entry-info";
+    const name = document.createElement("strong");
+    name.textContent = (d.label || "unknown device").slice(0, 60);
+    const meta = document.createElement("small");
+    meta.textContent = `last used ${new Date(d.lastSeen * 1000).toLocaleDateString()}`;
+    label.append(name, meta);
+    const del = document.createElement("button");
+    del.textContent = "revoke";
+    del.className = "copy danger-text";
+    del.onclick = async () => {
+      await api("/api/trusted-devices/delete", { id: d.id }).catch(fail);
+      renderTrustedDevices().catch(fail);
+    };
+    li.append(label, del);
+    list.append(li);
+  }
+  $("btn-trust-revoke-all").hidden = devs.length === 0;
+  $("btn-trust-revoke-all").onclick = async () => {
+    await api("/api/trusted-devices/delete", { all: true }).catch(fail);
+    renderTrustedDevices().catch(fail);
+  };
+  if (devs.length === 0) {
+    const li = document.createElement("li");
+    const small = document.createElement("small");
+    small.textContent = "None — check “trust this device” at the code prompt to add one.";
+    li.append(small);
+    list.append(li);
+  }
+}
+
+// TOTP enrollment (opt-in, from settings): the server hands out a candidate
+// secret; it only becomes active once one correct code confirms the
+// authenticator app has it. The secret is never handled by vault code paths.
+async function enrollTotp() {
+  const begin = await api("/api/totp/enroll/begin", {});
+  return new Promise((resolve, reject) => {
+    const dlg = $("totp-setup");
+    const codeEl = $("totp-setup-code");
+    $("totp-setup-error").textContent = "";
+    codeEl.value = "";
+    $("totp-setup-secret").textContent = begin.secret.replace(/(.{4})/g, "$1 ").trim();
+    drawQR($("totp-setup-qr"), begin.otpauth);
+    $("btn-totp-setup-copy").onclick = () => copySecret(begin.secret).catch(fail);
+    const submit = async () => {
+      const code = codeEl.value.trim();
+      if (!/^\d{6}$/.test(code)) { $("totp-setup-error").textContent = "Enter the 6-digit code."; return; }
+      try {
+        await api("/api/totp/enroll/finish", { code });
+        dlg.close();
+        resolve(openSettings());
+      } catch (err) {
+        $("totp-setup-error").textContent = err.message;
+        codeEl.value = "";
+        codeEl.focus();
+      }
+    };
+    $("btn-totp-setup").onclick = submit;
+    codeEl.onkeydown = (e) => { if (e.key === "Enter") submit(); };
+    const cancel = () => { dlg.close(); resolve(undefined); };
+    $("btn-totp-setup-cancel").onclick = cancel;
+    dlg.oncancel = cancel;
+    dlg.showModal();
+  });
+}
+
+// Render a QR code onto the canvas: always dark-on-white (scanners need a
+// light background even in dark mode) with a 4-module quiet zone. Failure
+// just hides the canvas — the secret is shown as text either way.
+function drawQR(canvas, text) {
+  try {
+    const matrix = qrMatrix(text);
+    const scale = 6, quiet = 4;
+    const px = (matrix.length + 2 * quiet) * scale;
+    canvas.width = canvas.height = px;
+    canvas.hidden = false;
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, px, px);
+    ctx.fillStyle = "#000";
+    for (let r = 0; r < matrix.length; r++) {
+      for (let c = 0; c < matrix.length; c++) {
+        if (matrix[r][c]) ctx.fillRect((quiet + c) * scale, (quiet + r) * scale, scale, scale);
+      }
+    }
+  } catch (err) {
+    console.error(err);
+    canvas.hidden = true;
+  }
+}
+
+async function disableTotp() {
+  const code = await guide("Disable two-factor code",
+    "Enter the current code from your authenticator app to turn this off. All trusted devices are forgotten.",
+    { input: "123456", button: "Disable" });
+  await api("/api/totp/disable", { code });
+  await openSettings();
 }
 
 // Step-guide modal: shown before each passkey prompt in multi-ceremony flows
@@ -315,6 +468,9 @@ function guide(title, text, opts = {}) {
     };
     $("btn-guide").onclick = () => done(true);
     $("btn-guide-cancel").onclick = () => done(false);
+    // Enter in the text field acts as the primary button (the dialog has no
+    // form, so the browser does nothing on its own).
+    inp.onkeydown = (e) => { if (e.key === "Enter") done(true); };
     dlg.oncancel = () => done(false);
     dlg.showModal();
     if (opts.input) inp.focus();
@@ -322,11 +478,23 @@ function guide(title, text, opts = {}) {
 }
 
 async function addPasskey() {
+  const { totpEnabled } = await api("/api/credentials");
   await guide("Add passkey — step 1 of 3",
     "First you'll create the NEW passkey. In the next browser dialog, pick where it should live — e.g. scan the QR code with your phone.");
   const begin = await api("/api/credentials/add/begin", {});
   const { cred, prfOut: fromCreate } = await createPasskey(begin.publicKey);
-  const finish = await api("/api/credentials/add/finish", cred.toJSON());
+  // On a TOTP-enrolled account, adding a passkey that could be a synced one
+  // needs a fresh code — a hijacked session alone must not be enough to
+  // plant an attacker-synced passkey. The server enforces this only for
+  // synced (BE=1) credentials; we can't tell in advance, so always ask.
+  let totpHeader;
+  if (totpEnabled) {
+    const code = await guide("Add passkey — confirm with your code",
+      "Your account uses a two-factor code. Enter the current code from your authenticator app to allow the new passkey.",
+      { input: "123456", button: "Confirm" });
+    totpHeader = { "X-GK-TOTP": code };
+  }
+  const finish = await api("/api/credentials/add/finish", cred.toJSON(), undefined, totpHeader);
   await guide("Add passkey — step 2 of 3",
     "Now confirm with a passkey you ALREADY use on this device. This unlocks your vault key so the new passkey can be granted access.");
   await provisionVaultKey(finish.credentialId, async () => {
@@ -480,6 +648,17 @@ async function enterVault() {
   show("vault");
   showList();
   armAutoLock();
+  updateSyncedBanner().catch(() => {});
+}
+
+// Nag (dismissible): every vault-capable passkey lives in a cloud sync
+// account and no TOTP backs them up — one compromised Apple/Google account
+// away from the vault. Suggest an anchor.
+async function updateSyncedBanner() {
+  if (localStorage.getItem("gk-synced-nag") === "off") return;
+  const info = await api("/api/credentials");
+  const anchored = info.credentials.some((c) => c.hasVaultKey && !c.backupEligible);
+  $("synced-banner").hidden = anchored || info.totpEnabled;
 }
 
 function sortedFiltered() {
@@ -666,6 +845,11 @@ function init() {
     else showList();
   };
   $("btn-add-passkey").onclick = () => addPasskey().catch(fail);
+  $("banner-settings").onclick = () => { $("synced-banner").hidden = true; openSettings().catch(fail); };
+  $("banner-dismiss").onclick = () => {
+    localStorage.setItem("gk-synced-nag", "off");
+    $("synced-banner").hidden = true;
+  };
   $("btn-regen-recovery").onclick = () => regenerateRecovery().catch(fail);
   $("btn-import").onclick = pickImportFile;
   $("btn-import-cancel").onclick = () => showPanel("settings");

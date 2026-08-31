@@ -4,6 +4,7 @@
 // register → recovery code → entry → lock/login → new recovery code →
 // lose the passkey → recover with the code.
 import { test, expect } from "@playwright/test";
+import { totpCode } from "../web/totp.js";
 import { execFile, spawn } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -14,12 +15,12 @@ const run = promisify(execFile);
 const ORIGIN = "http://localhost:8199";
 const USERNAME = "alice";
 
-let dir, server, inviteToken;
+let dir, server, inviteToken, bin, db;
 
 test.beforeAll(async () => {
   dir = await mkdtemp(join(tmpdir(), "gk-e2e-"));
-  const bin = join(dir, "gk");
-  const db = join(dir, "gk.db");
+  bin = join(dir, "gk");
+  db = join(dir, "gk.db");
   await run("go", ["build", "-o", bin, "."]);
   const { stdout } = await run(bin, ["invite", "-db", db, "-origin", ORIGIN, USERNAME]);
   inviteToken = stdout.match(/invite=(\S+)/)[1];
@@ -41,7 +42,7 @@ test.afterAll(async () => {
 // A virtual CTAP2 authenticator with PRF (hmac-secret) support. Presence and
 // user verification are simulated automatically, so WebAuthn prompts resolve
 // without interaction.
-async function addAuthenticator(page) {
+async function addAuthenticator(page, opts = {}) {
   const cdp = await page.context().newCDPSession(page);
   await cdp.send("WebAuthn.enable");
   const { authenticatorId } = await cdp.send("WebAuthn.addVirtualAuthenticator", {
@@ -53,6 +54,7 @@ async function addAuthenticator(page) {
       isUserVerified: true,
       automaticPresenceSimulation: true,
       hasPrf: true,
+      ...opts,
     },
   });
   return { cdp, authenticatorId };
@@ -137,4 +139,81 @@ test("register, entries, re-login, recovery code rotation and recovery", async (
   await page.click("#btn-recover");
   await expect(page.locator("#error")).not.toHaveText("", { timeout: 15_000 });
   await expect(page.locator("#vault")).toBeHidden();
+});
+
+// TOTP step-up for synced passkeys: register with a backup-eligible (BE=1)
+// virtual authenticator, opt into TOTP in settings, and verify the unlock
+// gate, the trusted-device skip, and revocation.
+test("TOTP step-up with a synced (backup-eligible) passkey", async ({ page }) => {
+  test.setTimeout(120_000);
+  page.on("dialog", (d) => d.accept());
+  await autoGuide(page);
+  await addAuthenticator(page, { defaultBackupEligibility: true, defaultBackupState: true });
+
+  // Each TOTP step may be spent only once; the server accepts ±1 step of
+  // skew, so borrow the next step when the current one is used up (worst
+  // case: one short wait for the clock to move on).
+  let lastStep = 0;
+  async function freshCode(secret) {
+    while (Math.floor(Date.now() / 30_000) + 1 <= lastStep) {
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    const step = Math.max(Math.floor(Date.now() / 30_000), lastStep + 1);
+    lastStep = step;
+    return totpCode(secret, step * 30_000 + 1);
+  }
+
+  const { stdout } = await run(bin, ["invite", "-db", db, "-origin", ORIGIN, "bob"]);
+  await page.goto(`/?invite=${stdout.match(/invite=(\S+)/)[1]}`);
+  await page.click("#btn-register");
+  await expect(page.locator("#recovery-code")).toBeVisible({ timeout: 15_000 });
+  await page.click("#btn-code-done");
+  await expect(page.locator("#vault")).toBeVisible();
+
+  // --- no TOTP enrolled: the synced-passkey nag is up; enroll from settings
+  await expect(page.locator("#synced-banner")).toBeVisible();
+  await page.click("#btn-settings");
+  await expect(page.locator("#cred-list small")).toContainText("synced");
+  await page.click("#btn-totp-toggle");
+  await expect(page.locator("#totp-setup")).toBeVisible();
+  await expect(page.locator("#totp-setup-qr")).toBeVisible(); // QR rendered (drawQR sets the size)
+  const secret = (await page.locator("#totp-setup-secret").textContent()).replace(/\s/g, "");
+  await page.fill("#totp-setup-code", "000000");
+  await page.click("#btn-totp-setup");
+  await expect(page.locator("#totp-setup-error")).toContainText("wrong code");
+  await page.fill("#totp-setup-code", await freshCode(secret));
+  await page.click("#btn-totp-setup");
+  await expect(page.locator("#totp-status")).toContainText("Enabled");
+
+  // --- unlock now requires a code; wrong one is retryable, then trust the device
+  await page.click("#btn-settings"); // back
+  await page.click("#btn-lock");
+  await page.click("#btn-login");
+  await expect(page.locator("#totp-login")).toBeVisible({ timeout: 15_000 });
+  await page.fill("#totp-login-code", "000000");
+  await page.click("#btn-totp-login");
+  await expect(page.locator("#totp-login-error")).toContainText("wrong code");
+  await page.fill("#totp-login-code", await freshCode(secret));
+  await page.check("#totp-login-trust");
+  await page.click("#btn-totp-login");
+  await expect(page.locator("#vault")).toBeVisible({ timeout: 15_000 });
+
+  // --- trusted device: the next unlock skips the prompt entirely
+  await page.click("#btn-lock");
+  await page.click("#btn-login");
+  await expect(page.locator("#vault")).toBeVisible({ timeout: 15_000 });
+  await expect(page.locator("#totp-login")).toBeHidden();
+
+  // --- revoke the trust: the prompt is back on the next unlock
+  await page.click("#btn-settings");
+  await expect(page.locator("#trust-list li")).toHaveCount(1);
+  await page.click("#btn-trust-revoke-all");
+  await expect(page.locator("#trust-list small")).toContainText("None");
+  await page.click("#btn-settings"); // back
+  await page.click("#btn-lock");
+  await page.click("#btn-login");
+  await expect(page.locator("#totp-login")).toBeVisible({ timeout: 15_000 });
+  await page.fill("#totp-login-code", await freshCode(secret));
+  await page.click("#btn-totp-login");
+  await expect(page.locator("#vault")).toBeVisible({ timeout: 15_000 });
 });

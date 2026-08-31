@@ -23,6 +23,7 @@ type server struct {
 	origin     string // external origin, e.g. https://vault.example.com
 	wa         *webauthn.WebAuthn
 	ceremonies *ceremonyStore
+	totpRL     *rateLimiter // per-user TOTP attempt limiter (6-digit codes; IP limiting alone is not enough)
 }
 
 func cmdServe(args []string) error {
@@ -67,7 +68,8 @@ func newServer(db *sql.DB, origin, proxySecret string) (*server, http.Handler, e
 	if err != nil {
 		return nil, nil, err
 	}
-	s := &server{db: db, origin: origin, wa: wa, ceremonies: newCeremonyStore()}
+	s := &server{db: db, origin: origin, wa: wa, ceremonies: newCeremonyStore(),
+		totpRL: newRateLimiter(5, 5, "")}
 	// Generous for humans (a login is 2-4 requests), hostile to brute force.
 	authRL := newRateLimiter(15, 30, proxySecret)
 
@@ -82,6 +84,7 @@ func newServer(db *sql.DB, origin, proxySecret string) (*server, http.Handler, e
 	mux.HandleFunc("POST /api/register/finish", authRL.wrap(s.handleRegisterFinish))
 	mux.HandleFunc("POST /api/login/begin", authRL.wrap(s.handleLoginBegin))
 	mux.HandleFunc("POST /api/login/finish", authRL.wrap(s.handleLoginFinish))
+	mux.HandleFunc("POST /api/login/totp", authRL.wrap(s.handleLoginTOTP))
 	mux.HandleFunc("POST /api/logout", s.handleLogout)
 	mux.HandleFunc("GET /api/me", s.requireAuth(s.handleMe))
 	mux.HandleFunc("POST /api/credentials/vault-key", s.requireAuth(s.handleSetVaultKey))
@@ -90,6 +93,11 @@ func newServer(db *sql.DB, origin, proxySecret string) (*server, http.Handler, e
 	mux.HandleFunc("POST /api/credentials/add/finish", s.requireAuth(s.handleAddCredFinish))
 	mux.HandleFunc("POST /api/credentials/rename", s.requireAuth(s.handleRenameCredential))
 	mux.HandleFunc("POST /api/credentials/delete", s.requireAuth(s.handleDeleteCredential))
+	mux.HandleFunc("POST /api/totp/enroll/begin", s.requireAuth(s.handleTOTPEnrollBegin))
+	mux.HandleFunc("POST /api/totp/enroll/finish", s.requireAuth(s.handleTOTPEnrollFinish))
+	mux.HandleFunc("POST /api/totp/disable", s.requireAuth(s.handleTOTPDisable))
+	mux.HandleFunc("GET /api/trusted-devices", s.requireAuth(s.handleListTrustedDevices))
+	mux.HandleFunc("POST /api/trusted-devices/delete", s.requireAuth(s.handleDeleteTrustedDevice))
 	mux.HandleFunc("POST /api/recovery", s.requireAuth(s.handleSetRecovery))
 	mux.HandleFunc("POST /api/recover/begin", authRL.wrap(s.handleRecoverBegin))
 	mux.HandleFunc("POST /api/recover/finish", authRL.wrap(s.handleRecoverFinish))
@@ -127,6 +135,7 @@ func securityHeaders(next http.Handler) http.Handler {
 func (s *server) cleanupExpired() {
 	s.db.Exec(`DELETE FROM sessions WHERE expires_at < unixepoch()`)
 	s.db.Exec(`DELETE FROM invites WHERE expires_at < unixepoch()`)
+	s.db.Exec(`DELETE FROM trusted_devices WHERE expires_at < unixepoch()`)
 }
 
 func (s *server) handleHealth(w http.ResponseWriter, r *http.Request) {

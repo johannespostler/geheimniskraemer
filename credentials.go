@@ -48,7 +48,7 @@ func exclusions(creds []webauthn.Credential) []protocol.CredentialDescriptor {
 // --- passkey management (authenticated) ---
 
 func (s *server) handleListCredentials(w http.ResponseWriter, r *http.Request, userID int64) {
-	rows, err := s.db.Query(`SELECT id, name, created_at, length(wrapped_vault_key) > 0
+	rows, err := s.db.Query(`SELECT id, name, created_at, length(wrapped_vault_key) > 0, credential_data
 		FROM credentials WHERE user_id = ? ORDER BY created_at`, userID)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -56,23 +56,30 @@ func (s *server) handleListCredentials(w http.ResponseWriter, r *http.Request, u
 	}
 	defer rows.Close()
 	type cred struct {
-		ID          string `json:"id"`
-		Name        string `json:"name"`
-		CreatedAt   int64  `json:"createdAt"`
-		HasVaultKey bool   `json:"hasVaultKey"`
+		ID             string `json:"id"`
+		Name           string `json:"name"`
+		CreatedAt      int64  `json:"createdAt"`
+		HasVaultKey    bool   `json:"hasVaultKey"`
+		BackupEligible bool   `json:"backupEligible"` // synced passkey (BE flag)
 	}
 	list := []cred{}
 	for rows.Next() {
 		var c cred
-		if err := rows.Scan(&c.ID, &c.Name, &c.CreatedAt, &c.HasVaultKey); err != nil {
+		var raw []byte
+		if err := rows.Scan(&c.ID, &c.Name, &c.CreatedAt, &c.HasVaultKey, &raw); err != nil {
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
+		}
+		var wc webauthn.Credential
+		if json.Unmarshal(raw, &wc) == nil {
+			c.BackupEligible = wc.Flags.BackupEligible
 		}
 		list = append(list, c)
 	}
 	var hasRecovery bool
 	s.db.QueryRow(`SELECT recovery_wrapped_key IS NOT NULL FROM users WHERE id = ?`, userID).Scan(&hasRecovery)
-	writeJSON(w, http.StatusOK, map[string]any{"credentials": list, "hasRecovery": hasRecovery})
+	_, totpEnabled := s.userTOTP(userID)
+	writeJSON(w, http.StatusOK, map[string]any{"credentials": list, "hasRecovery": hasRecovery, "totpEnabled": totpEnabled})
 }
 
 func (s *server) handleAddCredBegin(w http.ResponseWriter, r *http.Request, userID int64) {
@@ -111,6 +118,24 @@ func (s *server) handleAddCredFinish(w http.ResponseWriter, r *http.Request, use
 	if err != nil {
 		http.Error(w, "registration failed", http.StatusBadRequest)
 		return
+	}
+	// Planting a synced passkey grants vault access from a cloud account — a
+	// hijacked session must not be enough for that on a TOTP-enrolled
+	// account. The code rides in a header because the body is the WebAuthn
+	// attestation, parsed by the library.
+	if cred.Flags.BackupEligible {
+		if _, enrolled := s.userTOTP(userID); enrolled {
+			ok, limited := s.checkTOTP(userID, r.Header.Get("X-GK-TOTP"))
+			if limited {
+				w.Header().Set("Retry-After", "60")
+				http.Error(w, "too many attempts — wait a minute", http.StatusTooManyRequests)
+				return
+			}
+			if !ok {
+				http.Error(w, "adding a synced passkey requires a valid TOTP code", http.StatusForbidden)
+				return
+			}
+		}
 	}
 	credJSON, _ := json.Marshal(cred)
 	credID := base64.RawURLEncoding.EncodeToString(cred.ID)

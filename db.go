@@ -46,6 +46,15 @@ CREATE TABLE IF NOT EXISTS invites (
 	username   TEXT NOT NULL,
 	expires_at INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS trusted_devices (
+	id         TEXT PRIMARY KEY, -- SHA-256 of the cookie token (hashToken)
+	user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+	label      TEXT NOT NULL DEFAULT '', -- derived from User-Agent at creation
+	created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+	last_seen  INTEGER NOT NULL DEFAULT (unixepoch()),
+	expires_at INTEGER NOT NULL
+);
 `
 
 func openDB(path string) (*sql.DB, error) {
@@ -62,6 +71,8 @@ func openDB(path string) (*sql.DB, error) {
 	for _, alter := range []string{
 		`ALTER TABLE users ADD COLUMN recovery_verifier BLOB`,
 		`ALTER TABLE users ADD COLUMN recovery_wrapped_key BLOB`,
+		`ALTER TABLE users ADD COLUMN totp_secret BLOB`,       // RFC 6238 secret, NULL = not enrolled
+		`ALTER TABLE users ADD COLUMN totp_last_step INTEGER`, // last accepted time-step, replay guard
 	} {
 		if _, err := db.Exec(alter); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
 			db.Close()

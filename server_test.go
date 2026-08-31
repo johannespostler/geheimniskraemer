@@ -165,8 +165,8 @@ func TestRegisterBeginInviteValidation(t *testing.T) {
 	wantStatus(t, w, 200)
 	var opts struct {
 		PublicKey struct {
-			RP   struct{ ID string }
-			User struct{ Name string }
+			RP                     struct{ ID string }
+			User                   struct{ Name string }
 			AuthenticatorSelection struct {
 				ResidentKey      string
 				UserVerification string

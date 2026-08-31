@@ -58,6 +58,11 @@
         <button id="btn-logout" class="ghost">Log out</button>
       </header>
 
+      <p id="synced-banner" class="banner" hidden>All passkeys that can unlock this vault live in a
+        cloud sync account. Add a device-bound passkey (e.g. a security key) or enable a two-factor
+        code in <button id="banner-settings" class="linklike">Settings</button>.
+        <button id="banner-dismiss" class="linklike">Dismiss</button></p>
+
       <div id="browser">
         <div class="toolbar">
           <input id="search" type="search" placeholder="Search…" autocomplete="off">
@@ -110,6 +115,19 @@
         <div class="toolbar">
           <button id="btn-add-passkey">Add passkey</button>
         </div>
+        <h2>Two-factor code (TOTP)</h2>
+        <p id="totp-status"></p>
+        <div class="toolbar">
+          <button id="btn-totp-toggle" class="ghost"></button>
+        </div>
+        <div id="trusted-devices" hidden>
+          <h3>Trusted devices</h3>
+          <p>These devices skip the two-factor prompt when unlocking with a synced passkey.</p>
+          <ul id="trust-list"></ul>
+          <div class="toolbar">
+            <button id="btn-trust-revoke-all" class="ghost danger-text">Revoke all</button>
+          </div>
+        </div>
         <h2>Recovery</h2>
         <p id="recovery-status"></p>
         <div class="toolbar">
@@ -134,6 +152,36 @@
         </div>
       </div>
     </section>
+    <dialog id="totp-login">
+      <h2>Two-factor code</h2>
+      <p>This passkey is synced through a cloud account. Enter the code from your authenticator app.</p>
+      <p id="totp-login-error" class="error" role="alert"></p>
+      <input id="totp-login-code" inputmode="numeric" pattern="[0-9]*" maxlength="6"
+        autocomplete="one-time-code" spellcheck="false" placeholder="123456">
+      <label class="check"><input id="totp-login-trust" type="checkbox"> Trust this device for 60 days</label>
+      <div class="toolbar">
+        <button id="btn-totp-login">Verify</button>
+        <button id="btn-totp-login-cancel" class="ghost">Cancel</button>
+      </div>
+    </dialog>
+    <dialog id="totp-setup">
+      <h2>Enable two-factor code</h2>
+      <p>Scan the QR code with your authenticator app (e.g. Aegis) — or enter the secret manually —
+        then type the current code to confirm. Keep the app offline-only — the point is a secret
+        that never touches cloud sync.</p>
+      <canvas id="totp-setup-qr" width="0" height="0"></canvas>
+      <p id="totp-setup-secret" class="code"></p>
+      <p id="totp-setup-error" class="error" role="alert"></p>
+      <div class="toolbar">
+        <button id="btn-totp-setup-copy" class="ghost">Copy secret</button>
+      </div>
+      <input id="totp-setup-code" inputmode="numeric" pattern="[0-9]*" maxlength="6"
+        autocomplete="one-time-code" spellcheck="false" placeholder="123456">
+      <div class="toolbar">
+        <button id="btn-totp-setup">Confirm</button>
+        <button id="btn-totp-setup-cancel" class="ghost">Cancel</button>
+      </div>
+    </dialog>
     <dialog id="guide">
       <h2 id="guide-title"></h2>
       <p id="guide-text"></p>
