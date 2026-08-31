@@ -1,3 +1,15 @@
+@font-face {
+  font-family: "Nebula Sans";
+  src: url("/fonts/NebulaSans-Book.woff2") format("woff2");
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Nebula Sans";
+  src: url("/fonts/NebulaSans-Bold.woff2") format("woff2");
+  font-weight: 700;
+  font-display: swap;
+}
 :root {
   color-scheme: light dark;
   --fg: #1a1a1a;
@@ -12,7 +24,7 @@
 * { box-sizing: border-box; }
 body {
   margin: 0;
-  font-family: system-ui, sans-serif;
+  font-family: "Nebula Sans", system-ui, sans-serif;
   color: var(--fg);
   background: var(--bg);
 }
