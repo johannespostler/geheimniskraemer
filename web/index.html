@@ -14,6 +14,7 @@
 <body>
   <main>
     <p id="error" class="error" role="alert"></p>
+    <span id="live" class="visually-hidden" aria-live="polite"></span>
 
     <section id="login" hidden>
       <h1>Geheimniskrämer</h1>
@@ -55,7 +56,6 @@
         <span class="spacer"></span>
         <button id="btn-settings" class="ghost">Settings</button>
         <button id="btn-lock" class="ghost">Lock</button>
-        <button id="btn-logout" class="ghost">Log out</button>
       </header>
 
       <p id="synced-banner" class="banner" hidden>All passkeys that can unlock this vault live in a
@@ -65,7 +65,7 @@
 
       <div id="browser">
         <div class="toolbar">
-          <input id="search" type="search" placeholder="Search…" autocomplete="off">
+          <input id="search" type="search" placeholder="Search…" aria-label="Search entries" autocomplete="off">
           <button id="btn-add">Add</button>
         </div>
         <p id="empty" hidden>No entries yet.</p>
@@ -80,13 +80,13 @@
         <label>Password
           <span class="password-row">
             <input id="f-password" type="password" autocomplete="off">
-            <button id="btn-reveal" class="ghost icon" title="Show/hide">
+            <button id="btn-reveal" class="ghost icon" title="Show/hide" aria-label="Show password" aria-pressed="false">
               <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round">
                 <path d="M2.5 12S6 5.8 12 5.8 21.5 12 21.5 12 18 18.2 12 18.2 2.5 12 2.5 12Z"/>
                 <circle cx="12" cy="12" r="2.8"/>
               </svg>
             </button>
-            <button id="btn-generate" class="ghost icon" title="Generate">
+            <button id="btn-generate" class="ghost icon" title="Generate" aria-label="Generate password">
               <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
                 <path d="M20 5v5h-5"/>
                 <path d="M20 10a8 8 0 1 0 1.7 6"/>
@@ -96,8 +96,8 @@
         </label>
         <label>TOTP (2FA)
           <span class="password-row" id="totp-row">
-            <input id="f-totp" autocomplete="off" spellcheck="false" placeholder="otpauth:// or base32">
-            <span id="totp-preview" class="totp-code"></span>
+            <input id="f-totp" autocomplete="off" spellcheck="false" placeholder="otpauth:// or base32" aria-describedby="totp-preview">
+            <span id="totp-preview" class="totp-code" aria-live="polite"></span>
           </span>
         </label>
         <label>Notes <textarea id="f-notes" rows="3"></textarea></label>
@@ -157,7 +157,7 @@
       <p>This passkey is synced through a cloud account. Enter the code from your authenticator app.</p>
       <p id="totp-login-error" class="error" role="alert"></p>
       <input id="totp-login-code" inputmode="numeric" pattern="[0-9]*" maxlength="6"
-        autocomplete="one-time-code" spellcheck="false" placeholder="123456">
+        autocomplete="one-time-code" spellcheck="false" placeholder="123456" aria-label="6-digit code">
       <label class="check"><input id="totp-login-trust" type="checkbox"> Trust this device for 60 days</label>
       <div class="toolbar">
         <button id="btn-totp-login">Verify</button>
@@ -176,7 +176,7 @@
         <button id="btn-totp-setup-copy" class="ghost">Copy secret</button>
       </div>
       <input id="totp-setup-code" inputmode="numeric" pattern="[0-9]*" maxlength="6"
-        autocomplete="one-time-code" spellcheck="false" placeholder="123456">
+        autocomplete="one-time-code" spellcheck="false" placeholder="123456" aria-label="6-digit code">
       <div class="toolbar">
         <button id="btn-totp-setup">Confirm</button>
         <button id="btn-totp-setup-cancel" class="ghost">Cancel</button>
@@ -185,7 +185,7 @@
     <dialog id="guide">
       <h2 id="guide-title"></h2>
       <p id="guide-text"></p>
-      <input id="guide-input" autocomplete="off" hidden>
+      <input id="guide-input" autocomplete="off" aria-labelledby="guide-title" hidden>
       <div class="toolbar">
         <button id="btn-guide"></button>
         <button id="btn-guide-cancel" class="ghost">Cancel</button>

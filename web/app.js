@@ -35,9 +35,17 @@ async function api(path, body, method, headers) {
   return (res.headers.get("Content-Type") || "").includes("json") ? res.json() : null;
 }
 
+// Where focus should land per view, so keyboard users can act right away
+// (Enter on the recovery-code screen confirms storage, for example).
+const VIEW_FOCUS = {
+  login: "btn-login", register: "btn-register",
+  recover: "r-username", "recovery-code": "btn-code-done",
+};
+
 function show(view) {
   for (const v of ["login", "register", "recover", "recovery-code", "vault"]) $(v).hidden = v !== view;
   $("error").textContent = "";
+  if (VIEW_FOCUS[view]) $(VIEW_FOCUS[view]).focus();
 }
 
 function showPanel(panel) {
@@ -48,6 +56,14 @@ function showPanel(panel) {
 function fail(err) {
   console.error(err);
   $("error").textContent = err?.message || String(err);
+}
+
+// Screen-reader announcement via the aria-live region. Clearing first makes
+// repeated identical messages (two copies in a row) announce again.
+function announce(text) {
+  const el = $("live");
+  el.textContent = "";
+  requestAnimationFrame(() => { el.textContent = text; });
 }
 
 function supported() {
@@ -282,8 +298,9 @@ async function openSettings() {
     const li = document.createElement("li");
     const label = document.createElement("span");
     label.className = "entry-info";
+    const labelName = c.name || `passkey ${c.id.slice(0, 8)}`;
     const name = document.createElement("strong");
-    name.textContent = c.name || `passkey ${c.id.slice(0, 8)}`;
+    name.textContent = labelName;
     const meta = document.createElement("small");
     meta.textContent = new Date(c.createdAt * 1000).toLocaleDateString()
       + (c.backupEligible ? " — synced" : " — device-bound")
@@ -294,6 +311,7 @@ async function openSettings() {
       fix = document.createElement("button");
       fix.textContent = "finish setup";
       fix.className = "copy";
+      fix.setAttribute("aria-label", `Finish setup for ${labelName}`);
       fix.onclick = async () => {
         try {
           await guide("Finish setup — step 1 of 2",
@@ -310,6 +328,7 @@ async function openSettings() {
     const rename = document.createElement("button");
     rename.textContent = "rename";
     rename.className = "copy";
+    rename.setAttribute("aria-label", `Rename ${labelName}`);
     rename.onclick = async () => {
       const n = prompt("Name this passkey:", c.name);
       if (n === null) return;
@@ -319,6 +338,7 @@ async function openSettings() {
     const del = document.createElement("button");
     del.textContent = "revoke";
     del.className = "copy danger-text";
+    del.setAttribute("aria-label", `Revoke ${labelName}`);
     del.onclick = async () => {
       if (!confirm("Revoke this passkey? It will no longer unlock the vault.")) return;
       await api("/api/credentials/delete", { credentialId: c.id }).catch(fail);
@@ -357,6 +377,7 @@ async function renderTrustedDevices() {
     const del = document.createElement("button");
     del.textContent = "revoke";
     del.className = "copy danger-text";
+    del.setAttribute("aria-label", `Revoke trusted device ${name.textContent}`);
     del.onclick = async () => {
       await api("/api/trusted-devices/delete", { id: d.id }).catch(fail);
       renderTrustedDevices().catch(fail);
@@ -410,6 +431,7 @@ async function enrollTotp() {
     $("btn-totp-setup-cancel").onclick = cancel;
     dlg.oncancel = cancel;
     dlg.showModal();
+    codeEl.focus();
   });
 }
 
@@ -595,12 +617,20 @@ async function regenerateRecovery() {
   showRecoveryCode(code, () => { show("vault"); openSettings().catch(fail); });
 }
 
+// Lock = log out. Dropping the in-memory key alone would leave a valid
+// session behind — enough for an attacker at the browser to delete entries
+// or credentials even without being able to decrypt anything. Re-entry is a
+// full passkey ceremony either way (PRF is needed to re-derive the KEK), so
+// killing the session costs nothing. Best-effort: offline, the 12h TTL and
+// server-side cleanup are the backstop.
 function lock() {
   vaultKey = null;
   unlockCred = null;
   entries = [];
   $("list").replaceChildren();
+  $("search").value = "";
   show("login");
+  api("/api/logout", {}).catch(() => {});
 }
 
 // --- auto-lock: idle timeout, plus lock when the tab was hidden too long
@@ -629,11 +659,6 @@ function initAutoLock() {
       armAutoLock();
     }
   });
-}
-
-async function logout() {
-  try { await api("/api/logout", {}); } catch {}
-  lock();
 }
 
 // --- vault ---
@@ -678,7 +703,8 @@ function showList() {
 function renderList() {
   const list = $("list");
   list.replaceChildren();
-  for (const e of sortedFiltered()) {
+  const shown = sortedFiltered();
+  for (const e of shown) {
     const li = document.createElement("li");
     const info = document.createElement("div");
     info.className = "entry-info";
@@ -686,16 +712,18 @@ function renderList() {
     name.className = "entry-name";
     name.onclick = () => openEditor(e);
     const strong = document.createElement("strong");
-    strong.textContent = e.data.name || "(unnamed)";
+    const display = e.data.name || "(unnamed)";
+    strong.textContent = display;
     name.append(strong);
     info.append(name, siteLine(e.data.website));
     li.append(info,
-      copyButton("user", () => e.data.username),
-      copyButton("pass", () => e.data.password));
-    if (e.data.totp) li.append(copyButton("2FA", () => totpCode(e.data.totp)));
+      copyButton("user", () => e.data.username, `Copy username for ${display}`),
+      copyButton("pass", () => e.data.password, `Copy password for ${display}`));
+    if (e.data.totp) li.append(copyButton("2FA", () => totpCode(e.data.totp), `Copy 2FA code for ${display}`));
     list.append(li);
   }
-  $("empty").hidden = entries.length > 0;
+  $("empty").textContent = entries.length === 0 ? "No entries yet." : "No matches.";
+  $("empty").hidden = shown.length > 0;
 }
 
 // The website as a link when it parses as a web address, plain text otherwise.
@@ -736,16 +764,18 @@ async function copySecret(text) {
 
 const COPY_ICON = `<svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" d="M9 4h11v13M4 8h11v13H4z" stroke-linejoin="round"/></svg>`;
 
-function copyButton(label, getValue) {
+function copyButton(label, getValue, ariaLabel) {
   const btn = document.createElement("button");
   btn.innerHTML = `${label} ${COPY_ICON}`; // static markup only, no user data
   btn.className = "copy";
+  if (ariaLabel) btn.setAttribute("aria-label", ariaLabel);
   btn.onclick = async () => {
     try {
       // getValue may be async (TOTP codes are computed on demand).
       await copySecret(await getValue());
     } catch (err) { fail(err); return; }
-    btn.textContent = "✓";
+    btn.textContent = `${label} ✓`;
+    announce("Copied to clipboard.");
     setTimeout(() => { btn.innerHTML = `${label} ${COPY_ICON}`; }, 1200);
     // Best-effort clipboard clear. May overwrite something the user copied
     // in between; acceptable for a password manager.
@@ -763,9 +793,15 @@ function openEditor(entry) {
   for (const f of ["name", "website", "username", "password", "totp", "notes"]) {
     $(`f-${f}`).value = entry?.data[f] || "";
   }
-  $("f-password").type = "password";
+  setPasswordVisible(false);
   updateTotpPreview();
   $("f-name").focus();
+}
+
+// Keep the reveal button's toggle state in sync for assistive tech.
+function setPasswordVisible(visible) {
+  $("f-password").type = visible ? "text" : "password";
+  $("btn-reveal").setAttribute("aria-pressed", String(visible));
 }
 
 // Live preview of the current TOTP code next to the secret field.
@@ -812,7 +848,7 @@ function generatePassword() {
     if (b < 256 - (256 % alphabet.length)) out += alphabet[b % alphabet.length];
   }
   $("f-password").value = out;
-  $("f-password").type = "text";
+  setPasswordVisible(true);
 }
 
 function init() {
@@ -823,23 +859,24 @@ function init() {
   $("btn-login").onclick = () => login().catch(fail);
   $("btn-register").onclick = () => register().catch(fail);
   $("btn-lock").onclick = lock;
-  $("btn-logout").onclick = () => logout().catch(fail);
   $("btn-add").onclick = () => openEditor(null);
   $("btn-save").onclick = () => saveEntry().catch(fail);
   $("btn-cancel").onclick = showList;
   $("btn-delete").onclick = () => deleteEntry().catch(fail);
   $("btn-generate").onclick = generatePassword;
-  $("btn-reveal").onclick = () => {
-    const f = $("f-password");
-    f.type = f.type === "password" ? "text" : "password";
-  };
+  $("btn-reveal").onclick = () => setPasswordVisible($("f-password").type === "password");
   $("search").oninput = renderList;
   $("f-totp").oninput = updateTotpPreview;
   setInterval(updateTotpPreview, 1000);
   $("totp-row").append(copyButton("copy", () => {
     const secret = $("f-totp").value.trim();
     return secret ? totpCode(secret) : "";
-  }));
+  }, "Copy current 2FA code"));
+  // Enter in a single-line editor field saves (the notes textarea keeps
+  // Enter for newlines).
+  for (const f of ["name", "website", "username", "password", "totp"]) {
+    $(`f-${f}`).addEventListener("keydown", (e) => { if (e.key === "Enter") saveEntry().catch(fail); });
+  }
   $("btn-settings").onclick = () => {
     if ($("settings").hidden) openSettings().catch(fail);
     else showList();
@@ -856,6 +893,16 @@ function init() {
   $("btn-show-recover").onclick = () => show("recover");
   $("btn-recover-cancel").onclick = () => show("login");
   $("btn-recover").onclick = () => recover().catch(fail);
+  for (const f of ["r-username", "r-code"]) {
+    $(f).addEventListener("keydown", (e) => { if (e.key === "Enter") recover().catch(fail); });
+  }
+  // Escape backs out of the vault panels; dialogs handle Escape natively.
+  addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || $("vault").hidden || document.querySelector("dialog[open]")) return;
+    if (!$("editor").hidden) showList();
+    else if (!$("import").hidden) showPanel("settings");
+    else if (!$("settings").hidden) showList();
+  });
 
   initAutoLock();
   navigator.serviceWorker?.register("/sw.js").catch(() => {});

@@ -66,6 +66,7 @@ async function addAuthenticator(page, opts = {}) {
 function autoGuide(page) {
   return page.addInitScript(() => {
     setInterval(() => {
+      if (window.__noAutoGuide) return;
       const dlg = document.getElementById("guide");
       if (!dlg?.open) return;
       const title = document.getElementById("guide-title")?.textContent || "";
@@ -120,7 +121,7 @@ test("register, entries, re-login, recovery code rotation and recovery", async (
   await expect(page.locator("#settings")).toBeVisible();
 
   // --- lose the passkey, recover with username + new code on a fresh authenticator
-  await page.click("#btn-logout");
+  await page.click("#btn-lock");
   await expect(page.locator("#login")).toBeVisible();
   await auth.cdp.send("WebAuthn.removeVirtualAuthenticator", { authenticatorId: auth.authenticatorId });
   await addAuthenticator(page);
@@ -132,12 +133,12 @@ test("register, entries, re-login, recovery code rotation and recovery", async (
   await expect(page.locator("#list strong")).toHaveText("Example");
 
   // --- the old code must be dead after rotation
-  await page.click("#btn-logout");
+  await page.click("#btn-lock");
   await page.click("#btn-show-recover");
   await page.fill("#r-username", USERNAME);
   await page.fill("#r-code", firstCode);
   await page.click("#btn-recover");
-  await expect(page.locator("#error")).not.toHaveText("", { timeout: 15_000 });
+  await expect(page.locator("#error")).toContainText("recovery failed", { timeout: 15_000 });
   await expect(page.locator("#vault")).toBeHidden();
 });
 
@@ -213,7 +214,229 @@ test("TOTP step-up with a synced (backup-eligible) passkey", async ({ page }) =>
   await page.click("#btn-lock");
   await page.click("#btn-login");
   await expect(page.locator("#totp-login")).toBeVisible({ timeout: 15_000 });
+  // Enter submits the code dialog (fill leaves the field focused).
   await page.fill("#totp-login-code", await freshCode(secret));
-  await page.click("#btn-totp-login");
+  await page.keyboard.press("Enter");
   await expect(page.locator("#vault")).toBeVisible({ timeout: 15_000 });
+});
+
+async function invite(name) {
+  const { stdout } = await run(bin, ["invite", "-db", db, "-origin", ORIGIN, name]);
+  return stdout.match(/invite=(\S+)/)[1];
+}
+
+// Everyday vault usability: keyboard-first entry management, search with a
+// no-matches state, generator/reveal, TOTP preview + copy, passkey
+// rename/revoke, Bitwarden import, and the recover form submitting on Enter.
+test("entry management, search, keyboard flows, passkeys and import", async ({ page }) => {
+  test.setTimeout(120_000);
+  page.on("dialog", (d) => d.accept(d.type() === "prompt" ? "renamed key" : undefined));
+  await autoGuide(page);
+  const auth = await addAuthenticator(page);
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"], { origin: ORIGIN });
+
+  await page.goto(`/?invite=${await invite("carol")}`);
+  await page.click("#btn-register");
+  await expect(page.locator("#recovery-code")).toBeVisible({ timeout: 15_000 });
+  // The confirm button is focused, so Enter alone moves on.
+  await expect(page.locator("#btn-code-done")).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#vault")).toBeVisible();
+
+  // --- create an entry with the keyboard only: focus lands on the name
+  // field, Enter in any single-line field saves
+  await page.click("#btn-add");
+  await expect(page.locator("#f-name")).toBeFocused();
+  await page.fill("#f-name", "Alpha");
+  await page.fill("#f-username", "a@x.io");
+  await page.locator("#f-username").press("Enter");
+  await expect(page.locator("#editor")).toBeHidden();
+  await expect(page.locator("#list strong")).toHaveText("Alpha");
+
+  // --- generator fills and reveals the password; reveal toggles back
+  await page.click("#btn-add");
+  await page.fill("#f-name", "Beta");
+  await page.click("#btn-generate");
+  expect(await page.inputValue("#f-password")).toHaveLength(24);
+  await expect(page.locator("#f-password")).toHaveAttribute("type", "text");
+  await expect(page.locator("#btn-reveal")).toHaveAttribute("aria-pressed", "true");
+  await page.click("#btn-reveal");
+  await expect(page.locator("#f-password")).toHaveAttribute("type", "password");
+  await expect(page.locator("#btn-reveal")).toHaveAttribute("aria-pressed", "false");
+
+  // --- TOTP preview: a valid secret shows a ticking code, garbage says so
+  await page.fill("#f-totp", "JBSWY3DPEHPK3PXP");
+  await expect(page.locator("#totp-preview")).toHaveText(/^\d{6} · \d+s$/);
+  await page.fill("#f-totp", "not a secret!");
+  await expect(page.locator("#totp-preview")).toHaveText("invalid secret");
+  await page.fill("#f-totp", "JBSWY3DPEHPK3PXP");
+  await page.click("#btn-save");
+
+  // --- the 2FA button copies a current code and confirms without losing its label
+  const copy2fa = page.getByRole("button", { name: "Copy 2FA code for Beta" });
+  await copy2fa.click();
+  await expect(copy2fa).toHaveText(/2FA ✓/);
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toMatch(/^\d{6}$/);
+
+  // --- search filters; zero matches say so instead of a bare empty list
+  await page.fill("#search", "alp");
+  await expect(page.locator("#list li")).toHaveCount(1);
+  await page.fill("#search", "zzz");
+  await expect(page.locator("#list li")).toHaveCount(0);
+  await expect(page.locator("#empty")).toHaveText("No matches.");
+  await page.fill("#search", "");
+  await expect(page.locator("#list li")).toHaveCount(2);
+
+  // --- Escape cancels an edit without saving; a saved edit sticks
+  await page.locator(".entry-name", { hasText: "Alpha" }).click();
+  await page.fill("#f-username", "changed@x.io");
+  await page.keyboard.press("Escape");
+  await expect(page.locator("#editor")).toBeHidden();
+  await page.locator(".entry-name", { hasText: "Alpha" }).click();
+  await expect(page.locator("#f-username")).toHaveValue("a@x.io");
+  await page.fill("#f-username", "new@x.io");
+  await page.click("#btn-save");
+  await page.locator(".entry-name", { hasText: "Alpha" }).click();
+  await expect(page.locator("#f-username")).toHaveValue("new@x.io");
+  await page.click("#btn-cancel");
+
+  // --- delete an entry (confirm dialog is auto-accepted)
+  await page.locator(".entry-name", { hasText: "Beta" }).click();
+  await page.click("#btn-delete");
+  await expect(page.locator("#list li")).toHaveCount(1);
+
+  // --- Escape backs out of settings
+  await page.click("#btn-settings");
+  await expect(page.locator("#settings")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.locator("#browser")).toBeVisible();
+
+  // --- add a second passkey. It must land on a second authenticator (the
+  // first already holds a credential and is excluded; Chrome allows only one
+  // internal authenticator, so this one is a USB key). Chrome's virtual
+  // environment stalls the create when the excluded authenticator is
+  // present, so silence the first one's presence simulation during the
+  // create and re-enable it for the vault-key assertion — stepping the
+  // guides by hand to control the timing.
+  const auth2 = await addAuthenticator(page, { transport: "usb" });
+  const present = (a, enabled) => a.cdp.send("WebAuthn.setAutomaticPresenceSimulation",
+    { authenticatorId: a.authenticatorId, enabled });
+  const asserted = (a) => new Promise((r) => a.cdp.once("WebAuthn.credentialAsserted", r));
+  await page.click("#btn-settings");
+  await page.evaluate(() => { window.__noAutoGuide = true; });
+  await present(auth, false);
+  await page.click("#btn-add-passkey");
+  await expect(page.locator("#guide-title")).toHaveText(/step 1 of 3/);
+  await page.click("#btn-guide"); // → create on the USB authenticator
+  await expect(page.locator("#guide-title")).toHaveText(/step 2 of 3/, { timeout: 15_000 });
+  // Now the unlock passkey (internal) must answer alone.
+  await present(auth2, false);
+  await present(auth, true);
+  const unlockAsserted = asserted(auth);
+  await page.evaluate(() => { window.__noAutoGuide = false; }); // autoGuide steps the rest
+  await unlockAsserted;
+  // If the USB key still owes a PRF assertion, it must answer alone.
+  await present(auth, false);
+  await present(auth2, true);
+  await expect(page.locator("#guide-input")).toBeVisible({ timeout: 30_000 });
+  // Back to the internal authenticator for the rest of the test.
+  await present(auth2, false);
+  await present(auth, true);
+  await page.fill("#guide-input", "spare key");
+  await page.click("#btn-guide");
+  await expect(page.locator("#cred-list li")).toHaveCount(2);
+  await expect(page.locator("#cred-list")).toContainText("spare key");
+
+  // --- rename (prompt auto-answers "renamed key"), then revoke it
+  await page.getByRole("button", { name: "Rename spare key" }).click();
+  await expect(page.locator("#cred-list")).toContainText("renamed key");
+  await page.getByRole("button", { name: "Revoke renamed key" }).click();
+  await expect(page.locator("#cred-list li")).toHaveCount(1);
+
+  // --- Bitwarden import: preview with per-type skip counts, then run
+  const bw = {
+    items: [
+      { type: 1, name: "GitHub", login: { username: "carol", password: "pw", uris: [{ uri: "https://github.com" }] } },
+      { type: 2, name: "Note", notes: "hello" },
+      { type: 3, name: "Visa" },
+    ],
+  };
+  const [chooser] = await Promise.all([page.waitForEvent("filechooser"), page.click("#btn-import")]);
+  await chooser.setFiles({ name: "bw.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(bw)) });
+  await expect(page.locator("#import-summary")).toContainText("2 entries");
+  await expect(page.locator("#import-summary")).toContainText("1 card");
+  await expect(page.locator("#import-list li")).toHaveCount(2);
+  await page.click("#btn-import-run");
+  await expect(page.locator("#browser")).toBeVisible();
+  await expect(page.locator("#list li")).toHaveCount(3);
+
+  // --- lock clears the search box; focus lands on the unlock button
+  await page.fill("#search", "alp");
+  await page.click("#btn-lock");
+  await expect(page.locator("#login")).toBeVisible();
+  await expect(page.locator("#btn-login")).toBeFocused();
+
+  // --- recover form: focus starts on the username, Enter submits; a
+  // well-formed wrong code surfaces the server's message
+  await page.click("#btn-show-recover");
+  await expect(page.locator("#r-username")).toBeFocused();
+  await page.fill("#r-username", "carol");
+  await page.fill("#r-code", "aaaa-aaaa-aaaa-aaaa-aaaa-aaaa-aaaa-aaaa");
+  await page.locator("#r-code").press("Enter");
+  await expect(page.locator("#error")).toContainText("recovery failed", { timeout: 15_000 });
+
+  await page.click("#btn-recover-cancel");
+  await page.click("#btn-login");
+  await expect(page.locator("#vault")).toBeVisible({ timeout: 15_000 });
+  await expect(page.locator("#search")).toHaveValue("");
+  await expect(page.locator("#list li")).toHaveCount(3);
+});
+
+// Failure paths: an authenticator without PRF gets the tailored error, and a
+// 401 mid-session locks the vault with an explanation.
+test("PRF-unsupported authenticator and session expiry", async ({ page }) => {
+  page.on("dialog", (d) => d.accept());
+  await autoGuide(page);
+  const auth = await addAuthenticator(page, { hasPrf: false });
+
+  await page.goto(`/?invite=${await invite("erin")}`);
+  await page.click("#btn-register");
+  await expect(page.locator("#error")).toContainText("PRF", { timeout: 15_000 });
+
+  // Fresh PRF-capable authenticator, fresh user; then simulate an expired
+  // session on the next API call.
+  await auth.cdp.send("WebAuthn.removeVirtualAuthenticator", { authenticatorId: auth.authenticatorId });
+  await addAuthenticator(page);
+  await page.goto(`/?invite=${await invite("frank")}`);
+  await page.click("#btn-register");
+  await expect(page.locator("#recovery-code")).toBeVisible({ timeout: 15_000 });
+  await page.click("#btn-code-done");
+  await expect(page.locator("#vault")).toBeVisible();
+  await page.waitForLoadState("networkidle"); // let the synced-banner check finish first
+  await page.route("**/api/credentials", (r) => r.fulfill({ status: 401, body: "session expired" }));
+  await page.click("#btn-settings");
+  await expect(page.locator("#login")).toBeVisible();
+  await expect(page.locator("#error")).toContainText("Session expired");
+});
+
+// Idle auto-lock: five minutes without input drops back to the login view.
+// The clock is faked only after unlock so the register ceremony (and the
+// autoGuide interval) run on real timers; the click re-arms the idle timer
+// under the fake clock.
+test("auto-lock after five idle minutes", async ({ page }) => {
+  page.on("dialog", (d) => d.accept());
+  await autoGuide(page);
+  await addAuthenticator(page);
+
+  await page.goto(`/?invite=${await invite("grace")}`);
+  await page.click("#btn-register");
+  await expect(page.locator("#recovery-code")).toBeVisible({ timeout: 15_000 });
+  await page.click("#btn-code-done");
+  await expect(page.locator("#vault")).toBeVisible();
+  await expect(page.locator("#guide")).toBeHidden(); // second-passkey offer auto-declined
+
+  await page.clock.install();
+  await page.click("#search");
+  await page.clock.fastForward("05:01");
+  await expect(page.locator("#login")).toBeVisible();
 });

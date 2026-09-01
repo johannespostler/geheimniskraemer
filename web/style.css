@@ -62,6 +62,15 @@ input, textarea {
 }
 label { display: block; margin-bottom: 0.7rem; }
 .error { color: #c0392b; min-height: 1.2em; }
+/* Present for screen readers only (e.g. the aria-live copy announcement). */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
 .spacer { flex: 1; }
 
 header, .toolbar {
