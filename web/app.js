@@ -140,6 +140,7 @@ async function register() {
   vaultKey = await unwrapVaultKey(kek, wrapped);
   await api("/api/credentials/vault-key", { credentialId: finish.credentialId, wrapped: b64u(wrapped) });
   unlockCred = { idBytes: new Uint8Array(cred.rawId), wrapped };
+  await namePasskey(finish.credentialId, "Name your passkey");
 
   // Set up the recovery code while we still hold the raw key bytes.
   const code = generateRecoveryCode();
@@ -158,6 +159,15 @@ async function register() {
     } catch { return; }
     await addPasskey();
   });
+}
+
+// Offer to name a freshly created passkey. The passkey works regardless, so
+// a cancelled dialog is not an error.
+async function namePasskey(credentialId, title) {
+  const name = await guide(title,
+    "Give this passkey a name so you can recognize it later.",
+    { input: "e.g. phone, yubikey, macbook", button: "Save" }).catch(() => null);
+  if (name) await api("/api/credentials/rename", { credentialId, name });
 }
 
 async function uploadRecovery(code, wrappedRec) {
@@ -276,6 +286,7 @@ async function recover() {
   vaultKey = await unwrapVaultKey(kekNew, wrapped); // swap to non-extractable
   unlockCred = { idBytes: new Uint8Array(cred.rawId), wrapped };
   $("r-code").value = "";
+  await namePasskey(finish.credentialId, "Name your new passkey");
   await enterVault();
 }
 
@@ -358,6 +369,7 @@ async function openSettings() {
 
   $("recovery-status").textContent = info.hasRecovery
     ? "A recovery code is set." : "No recovery code set — lose all passkeys and the vault is gone.";
+  leaveList();
   showPanel("settings");
 }
 
@@ -525,11 +537,7 @@ async function addPasskey() {
       "Your authenticator needs one extra touch: use the NEW passkey once (scan the QR code again if it's on your phone).");
     return getPRFOutput(cred.rawId);
   });
-  // The passkey works from here on — a cancelled name step is not an error.
-  const name = await guide("Add passkey — step 3 of 3",
-    "Give the new passkey a name so you can recognize it later.",
-    { input: "e.g. phone, yubikey, macbook", button: "Save" }).catch(() => null);
-  if (name) await api("/api/credentials/rename", { credentialId: finish.credentialId, name });
+  await namePasskey(finish.credentialId, "Add passkey — step 3 of 3");
   await openSettings();
 }
 
@@ -694,10 +702,19 @@ function sortedFiltered() {
     .sort((a, b) => (a.data.name || "").localeCompare(b.data.name || ""));
 }
 
+// Where the list was scrolled to before a panel replaced it, so coming back
+// lands on the same entry instead of the top of the list.
+let listScrollY = 0;
+
+function leaveList() {
+  if (!$("browser").hidden) listScrollY = scrollY;
+}
+
 function showList() {
   showPanel("browser");
   renderList();
-  $("search").focus();
+  scrollTo(0, listScrollY);
+  $("search").focus({ preventScroll: true });
 }
 
 function renderList() {
@@ -786,7 +803,9 @@ function copyButton(label, getValue, ariaLabel) {
 }
 
 function openEditor(entry) {
+  leaveList();
   showPanel("editor");
+  scrollTo(0, 0);
   $("editor-title").textContent = entry ? "Edit entry" : "New entry";
   $("btn-delete").hidden = !entry;
   $("editor").dataset.id = entry?.id || "";
@@ -868,6 +887,7 @@ function init() {
   $("search").oninput = renderList;
   $("f-totp").oninput = updateTotpPreview;
   setInterval(updateTotpPreview, 1000);
+  $("password-row").append(copyButton("copy", () => $("f-password").value, "Copy password"));
   $("totp-row").append(copyButton("copy", () => {
     const secret = $("f-totp").value.trim();
     return secret ? totpCode(secret) : "";

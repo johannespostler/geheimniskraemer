@@ -62,7 +62,8 @@ async function addAuthenticator(page, opts = {}) {
 
 // The app shows step-guide dialogs before some passkey prompts (which ones
 // depends on whether the authenticator evaluates PRF at creation). Auto-click
-// through them; decline the optional "add a second passkey" offer.
+// through them; name the first passkey "first key"; decline the optional
+// "add a second passkey" offer.
 function autoGuide(page) {
   return page.addInitScript(() => {
     setInterval(() => {
@@ -71,7 +72,10 @@ function autoGuide(page) {
       if (!dlg?.open) return;
       const title = document.getElementById("guide-title")?.textContent || "";
       if (title.includes("second passkey")) document.getElementById("btn-guide-cancel")?.click();
-      else if (document.getElementById("guide-input")?.hidden) document.getElementById("btn-guide")?.click();
+      else if (title.startsWith("Name your")) {
+        document.getElementById("guide-input").value = "first key";
+        document.getElementById("btn-guide")?.click();
+      } else if (document.getElementById("guide-input")?.hidden) document.getElementById("btn-guide")?.click();
     }, 100);
   });
 }
@@ -345,6 +349,7 @@ test("entry management, search, keyboard flows, passkeys and import", async ({ p
   await page.fill("#guide-input", "spare key");
   await page.click("#btn-guide");
   await expect(page.locator("#cred-list li")).toHaveCount(2);
+  await expect(page.locator("#cred-list")).toContainText("first key"); // named at registration
   await expect(page.locator("#cred-list")).toContainText("spare key");
 
   // --- rename (prompt auto-answers "renamed key"), then revoke it
