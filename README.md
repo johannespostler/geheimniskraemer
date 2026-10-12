@@ -1,7 +1,14 @@
 # Geheimniskrämer
 
-Self-hosted, single-binary password manager. Passkey-only login (WebAuthn + PRF),
-end-to-end encrypted vault, PWA. See `plans/PLAN.md` for the design.
+Very opinionated, self-hosted, single-binary password manager. 
+Login only via Passkey (WebAuthn + PRF), end-to-end encrypted vault, PWA. 
+There is currently no browser extensions, because I like the security boundary between different browsers and I'm fine with copy-pasting.
+
+While it does support multiple users, it likely doesn't scale well due to SQLite in the backend. A couple of users should be fine thought.
+
+Let me know, if you spot any bugs or flaws.
+
+See `plans/PLAN.md` for the design.
 
 ## Run (dev)
 
@@ -36,7 +43,7 @@ passkeys.
 
 ### systemd, not a container
 
-Deploy via the hardened systemd unit in `gk.service.example`, not a
+I deploy via the hardened systemd unit in `gk.service.example`, not a
 container. For a single static binary, the unit confines tighter than a
 default container and adds no daemon or image supply chain:
 
@@ -47,9 +54,7 @@ default container and adds no daemon or image supply chain:
 
 Caveat: the data dir belongs to the dynamic user, so run `gk invite` via
 `systemd-run` (see comments in the unit) or briefly stop the service and run
-it as root. If the host standardizes on containers later, a `FROM scratch`
-image with read-only root and dropped capabilities is an acceptable
-equivalent — but don't add a container runtime just for this service.
+it as root.
 
 ## Backup
 
